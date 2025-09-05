@@ -17,15 +17,16 @@ const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w
 
 // --- Firebase Konfiguration ---
 let firebaseConfig = null;
+
 try {
-    // This will throw a ReferenceError in environments without import.meta, like the preview.
+    // This will throw a ReferenceError in environments without import.meta, like this preview environment.
     const configStr = import.meta.env.VITE_FIREBASE_CONFIG;
     if (configStr) {
         const cleaned = configStr.startsWith("'") && configStr.endsWith("'") ? configStr.slice(1, -1) : configStr;
         firebaseConfig = JSON.parse(cleaned);
     }
 } catch (e) {
-    // This block will execute in the preview environment.
+    // This block will execute in the preview environment where import.meta is not defined.
     if (typeof __firebase_config !== 'undefined') {
         try {
             firebaseConfig = JSON.parse(__firebase_config);
@@ -224,7 +225,7 @@ function WardrobeManager({ user, appData }) {
 
     useEffect(() => {
         if (appData.mode === 'family' && appData.familyId) {
-            const membershipsQuery = query(collection(db, `artifacts/${appId}/public/data/memberships`), where("familyId", "==", appData.familyId));
+            const membershipsQuery = query(collection(db, `/artifacts/${appId}/public/data/memberships`), where("familyId", "==", appData.familyId));
             const unsubscribe = onSnapshot(membershipsQuery, (snapshot) => {
                 const membersList = snapshot.docs.map(doc => ({
                     id: doc.data().userId, docId: doc.id, ...doc.data(), type: 'full'
