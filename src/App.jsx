@@ -19,14 +19,12 @@ const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w
 let firebaseConfig = null;
 
 try {
-    // This will throw a ReferenceError in environments without import.meta, like this preview environment.
     const configStr = import.meta.env.VITE_FIREBASE_CONFIG;
     if (configStr) {
         const cleaned = configStr.startsWith("'") && configStr.endsWith("'") ? configStr.slice(1, -1) : configStr;
         firebaseConfig = JSON.parse(cleaned);
     }
 } catch (e) {
-    // This block will execute in the preview environment where import.meta is not defined.
     if (typeof __firebase_config !== 'undefined') {
         try {
             firebaseConfig = JSON.parse(__firebase_config);
