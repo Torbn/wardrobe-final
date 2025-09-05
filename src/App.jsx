@@ -17,8 +17,6 @@ const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w
 
 // --- Firebase Konfiguration ---
 let firebaseConfig = null;
-
-// Denna struktur är utformad för att fungera i både Netlify och förhandsvisningsmiljön.
 try {
     // This will throw a ReferenceError in environments without import.meta, like the preview.
     const configStr = import.meta.env.VITE_FIREBASE_CONFIG;
@@ -48,9 +46,7 @@ if (firebaseConfig) {
         app = initializeApp(firebaseConfig);
         auth = getAuth(app);
         db = getFirestore(app);
-    } catch (e) {
-        console.error("Firebase initialization error:", e);
-    }
+    } catch (e) { console.error("Firebase initialization error:", e); }
 }
 
 // --- Bildhanteringsfunktion ---
@@ -63,22 +59,9 @@ const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => ne
         img.onload = () => {
             const canvas = document.createElement('canvas');
             let { width, height } = img;
-
-            if (width > height) {
-                if (width > maxWidth) {
-                    height *= maxWidth / width;
-                    width = maxWidth;
-                }
-            } else {
-                if (height > maxHeight) {
-                    width *= maxHeight / height;
-                    height = maxHeight;
-                }
-            }
-
-            canvas.width = width;
-            canvas.height = height;
-
+            if (width > height) { if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; } }
+            else { if (height > maxHeight) { width *= maxHeight / height; height = maxHeight; } }
+            canvas.width = width; canvas.height = height;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, width, height);
             resolve(canvas.toDataURL('image/jpeg', quality));
@@ -114,89 +97,96 @@ export default function App() {
     const [error, setError] = useState('');
 
     useEffect(() => {
-        if (!auth) {
-            setError("Firebase är inte konfigurerat.");
-            setLoading(false);
-            return;
-        }
+        if (!auth) { setError("Firebase är inte konfigurerat."); setLoading(false); return; }
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                const unsubProfile = onSnapshot(userDocRef, (userDocSnap) => {
-                    if (userDocSnap.exists()) {
-                        setAppData(userDocSnap.data());
-                    } else {
-                        setAppData(null);
-                    }
+                return onSnapshot(userDocRef, (userDocSnap) => {
+                    setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
                     setLoading(false);
-                });
-                return () => unsubProfile();
+                }, () => setLoading(false));
             } else {
                  try {
-                    // Använd __initial_auth_token i Canvas, annars anonym inloggning.
-                    if (typeof __initial_auth_token !== 'undefined') {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (err) {
-                    console.error("Sign-in error:", err);
-                    setError("Autentisering misslyckades.");
-                    setLoading(false);
-                }
+                    if (typeof __initial_auth_token !== 'undefined') await signInWithCustomToken(auth, __initial_auth_token);
+                    else await signInAnonymously(auth);
+                } catch (err) { setError("Autentisering misslyckades."); setLoading(false); }
             }
         });
-
         return () => unsubscribe();
     }, []);
 
     const handleProfileSetup = async (name, mode) => {
-        if (!user) return;
-        setLoading(true);
-        setError('');
+        if (!user) return; setLoading(true); setError('');
         try {
             const userProfile = { name, mode, familyId: null };
-
             if (mode === 'family') {
                 const familyId = doc(collection(db, '_')).id;
                 userProfile.familyId = familyId;
-                
-                const familyDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/families/${familyId}`);
+                const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
                 await setDoc(familyDocRef, {
-                    owner: user.uid,
-                    name: `${name}s familj`,
-                    createdAt: serverTimestamp(),
-                    members: {
-                        [user.uid]: { name, role: 'admin' }
-                    }
+                    owner: user.uid, name: `${name}s familj`, createdAt: serverTimestamp(),
+                });
+                const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
+                await setDoc(membershipDocRef, {
+                    userId: user.uid, familyId, name, role: 'admin', isPrivate: false,
                 });
             }
-            
             await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), userProfile);
-
-        } catch (e) {
-            console.error("Profile setup error: ", e);
-            setError("Ett fel uppstod när profilen skulle skapas. Försök igen.");
-        }
+        } catch (e) { console.error("Profile setup error: ", e); setError("Kunde inte skapa profilen."); }
         setLoading(false);
     };
+
+    const handleJoinRequest = async (name, familyId) => {
+        if (!user || !name || !familyId) return; setLoading(true); setError('');
+        try {
+            const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
+            if (!(await getDoc(familyDocRef)).exists()) throw new Error("Familjen finns inte.");
+            
+            const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
+            await setDoc(joinRequestRef, {
+                familyId, requesterId: user.uid, requesterName: name, status: 'pending',
+            });
+            await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), {
+                name, mode: 'family', status: 'pending', requestedFamilyId: familyId
+            });
+        } catch(e) { console.error("Join request error:", e); setError(e.message || "Kunde inte skicka förfrågan."); }
+        setLoading(false);
+    }
 
     if (loading) return <div className="flex items-center justify-center h-screen bg-gray-100"><div className="text-xl font-semibold">Laddar garderoben...</div></div>;
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
     if (!auth) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">Firebase är inte konfigurerat.</div></div>;
-
+    
+    if (user && appData?.status === 'pending') return <PendingApprovalScreen />;
 
     return (
         <div className="h-screen w-screen bg-gray-100 antialiased">
-            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} error={error} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <div className="flex items-center justify-center h-screen">Loggar in...</div>}
+            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} error={error} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <div className="flex items-center justify-center h-screen">Loggar in...</div>}
         </div>
     );
 }
 
 // --- Komponent: Profil-setup ---
-function ProfileSetup({ onSetup, error }) {
+function ProfileSetup({ onSetup, onJoinRequest, error }) {
     const [name, setName] = useState('');
+    const [joinFamilyId, setJoinFamilyId] = useState('');
+    const [view, setView] = useState('main');
+
+    if (view === 'join') {
+        return (
+            <div className="flex items-center justify-center h-screen">
+                <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
+                    <h2 className="text-2xl font-bold mb-4">Gå med i familj</h2>
+                    {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+                    <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ditt namn" className="w-full p-2 border rounded mb-4" />
+                    <input type="text" value={joinFamilyId} onChange={e => setJoinFamilyId(e.target.value)} placeholder="Familjekod" className="w-full p-2 border rounded mb-4" />
+                    <button onClick={() => onJoinRequest(name, joinFamilyId)} disabled={!name || !joinFamilyId} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-300">Skicka förfrågan</button>
+                    <button onClick={() => setView('main')} className="mt-4 text-sm text-gray-600">Tillbaka</button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex items-center justify-center h-screen">
@@ -208,24 +198,61 @@ function ProfileSetup({ onSetup, error }) {
                 <div className="space-y-3">
                     <button onClick={() => onSetup(name, 'personal')} disabled={!name} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-300">Bara för mig</button>
                     <button onClick={() => onSetup(name, 'family')} disabled={!name} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-300">Skapa en familj</button>
-                    <p className="text-xs text-gray-400 pt-2">Funktionen "Gå med i familj" kommer snart!</p>
+                    <button onClick={() => setView('join')} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
                 </div>
             </div>
         </div>
     );
 }
 
+// --- Komponent: Väntar på godkännande ---
+function PendingApprovalScreen() {
+    return (
+        <div className="flex flex-col items-center justify-center h-screen bg-gray-100 p-4 text-center">
+            <h2 className="text-2xl font-bold mb-4">Förfrågan skickad</h2>
+            <p className="text-gray-600">Väntar på att en administratör för familjen ska godkänna din förfrågan.</p>
+        </div>
+    );
+}
+
+
 // --- Komponent: Huvudvy för Garderoben ---
 function WardrobeManager({ user, appData }) {
     const [currentView, setCurrentView] = useState('wardrobe');
+    const [familyMembers, setFamilyMembers] = useState([]);
     const [currentWardrobeOwner, setCurrentWardrobeOwner] = useState({ id: user.uid, name: appData.name });
+
+    useEffect(() => {
+        if (appData.mode === 'family' && appData.familyId) {
+            const membershipsQuery = query(collection(db, `artifacts/${appId}/public/data/memberships`), where("familyId", "==", appData.familyId));
+            const unsubscribe = onSnapshot(membershipsQuery, (snapshot) => {
+                const membersList = snapshot.docs.map(doc => ({
+                    id: doc.data().userId, docId: doc.id, ...doc.data(), type: 'full'
+                }));
+                setFamilyMembers(membersList);
+            });
+            return unsubscribe;
+        } else {
+             setFamilyMembers([{ id: user.uid, name: appData.name, type: 'full' }]);
+        }
+    }, [appData.familyId, appData.mode, user.uid, appData.name]);
+    
+    const visibleMembers = useMemo(() => {
+        if (appData.mode !== 'family') return [{ id: user.uid, name: appData.name, type: 'full' }];
+        return familyMembers.filter(m => m.id === user.uid || !m.isPrivate);
+    }, [familyMembers, user.uid, appData]);
+    
+    useEffect(() => {
+        const self = familyMembers.find(m => m.id === user.uid) || { id: user.uid, name: appData.name };
+        setCurrentWardrobeOwner(self);
+    }, [familyMembers, user.uid, appData.name]);
 
     const renderContent = () => {
         switch (currentView) {
             case 'wardrobe': return <WardrobeView owner={currentWardrobeOwner} />;
             case 'outfits': return <OutfitsView owner={currentWardrobeOwner} />;
             case 'chat': return <p>Chatt är under utveckling.</p>;
-            case 'settings': return <SettingsView user={user} appData={appData} />;
+            case 'settings': return <SettingsView user={user} appData={appData} members={familyMembers} />;
             default: return null;
         }
     };
@@ -235,8 +262,10 @@ function WardrobeManager({ user, appData }) {
             <header className="bg-white shadow-md p-4 flex flex-col sm:flex-row justify-between items-center gap-4">
                 <h1 className="text-xl font-bold text-center sm:text-left">{currentWardrobeOwner.name}'s Garderob</h1>
                 {appData.mode === 'family' && (
-                    <div className="bg-blue-100 text-blue-800 text-sm font-semibold px-3 py-1 rounded-full">
-                        Familjeläge
+                    <div className="flex items-center gap-4">
+                        <select value={currentWardrobeOwner.id} onChange={e => { const selected = visibleMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
+                           {visibleMembers.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
+                        </select>
                     </div>
                 )}
             </header>
@@ -244,7 +273,7 @@ function WardrobeManager({ user, appData }) {
             <nav className="fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around p-2">
                 <button onClick={() => setCurrentView('wardrobe')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'wardrobe' ? 'text-blue-600' : 'text-gray-500'}`}><HomeIcon /> Plagg</button>
                 <button onClick={() => setCurrentView('outfits')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'outfits' ? 'text-blue-600' : 'text-gray-500'}`}><OutfitIcon /> Outfits</button>
-                {appData.mode === 'family' && <button onClick={() => setCurrentView('chat')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'chat' ? 'text-blue-600' : 'text-gray-500'}`}><ChatIcon /> Chatt</button>}
+                <button onClick={() => setCurrentView('chat')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'chat' ? 'text-blue-600' : 'text-gray-500'}`}><ChatIcon /> Chatt</button>
                 <button onClick={() => setCurrentView('settings')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'settings' ? 'text-blue-600' : 'text-gray-500'}`}><SettingsIcon /> Inställningar</button>
             </nav>
         </div>
@@ -252,46 +281,91 @@ function WardrobeManager({ user, appData }) {
 }
 
 // --- Komponent: Inställningar ---
-function SettingsView({ user, appData }) {
+function SettingsView({ user, appData, members = [] }) {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [joinRequests, setJoinRequests] = useState([]);
+    const currentUserData = members.find(m => m.id === user.uid);
+    const role = currentUserData?.role;
+
+    useEffect(() => {
+        if (role === 'admin' && appData.familyId) {
+            const requestsQuery = query(collection(db, `/artifacts/${appId}/public/data/joinRequests`), where("familyId", "==", appData.familyId), where("status", "==", "pending"));
+            const unsubscribe = onSnapshot(requestsQuery, (snapshot) => {
+                setJoinRequests(snapshot.docs.map(d => ({ docId: d.id, ...d.data() })));
+            });
+            return unsubscribe;
+        }
+    }, [role, appData.familyId]);
+
+    const handlePrivacyToggle = async (e) => {
+        if (!currentUserData?.docId) return;
+        const memberDocRef = doc(db, `/artifacts/${appId}/public/data/memberships/${currentUserData.docId}`);
+        await updateDoc(memberDocRef, { isPrivate: e.target.checked });
+    };
+
+    const handleApproveRequest = async (request) => {
+        const membershipRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
+        await setDoc(membershipRef, {
+            userId: request.requesterId, familyId: request.familyId, name: request.requesterName, role: 'member', isPrivate: false,
+        });
+        const userProfileRef = doc(db, `/artifacts/${appId}/users/${request.requesterId}/profile/main`);
+        await updateDoc(userProfileRef, { status: 'approved', familyId: request.familyId });
+        await deleteDoc(doc(db, `/artifacts/${appId}/public/data/joinRequests/${request.docId}`));
+    };
+
+    const handleDenyRequest = async (request) => {
+        await deleteDoc(doc(db, `/artifacts/${appId}/public/data/joinRequests/${request.docId}`));
+        const userProfileRef = doc(db, `/artifacts/${appId}/users/${request.requesterId}/profile/main`);
+        await updateDoc(userProfileRef, { status: 'denied', requestedFamilyId: null });
+    };
 
     const handleDeleteProfile = async () => {
         const profileDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
-        // Här skulle man också kunna radera familjedata, plagg etc. men för nu räcker profilen.
         await deleteDoc(profileDocRef);
-        setShowDeleteModal(false); // Stänger modalen, real-time-lyssnaren i App sköter resten.
+        // Ytterligare logik för att radera medlemskap etc. kan läggas till här
+        setShowDeleteModal(false);
     };
 
     return (
         <>
-            <Modal
-                isOpen={showDeleteModal}
-                onClose={() => setShowDeleteModal(false)}
-                onConfirm={handleDeleteProfile}
-                title="Radera profil"
-                confirmText="Ja, radera"
-            >
-                <p>Är du säker på att du vill radera din profil? All din data kommer att försvinna och du kommer att få börja om.</p>
+            <Modal isOpen={showDeleteModal} onClose={() => setShowDeleteModal(false)} onConfirm={handleDeleteProfile} title="Radera profil" confirmText="Ja, radera">
+                <p>Är du säker på att du vill radera din profil? All din data kommer att försvinna.</p>
             </Modal>
             <div className="max-w-xl mx-auto space-y-8">
-                <div className="bg-white p-6 rounded-lg shadow">
-                    <h2 className="text-xl font-bold mb-4">Inställningar</h2>
-                    <p className="text-gray-600">Ditt användar-ID: <span className="font-mono bg-gray-100 p-1 rounded text-sm">{user.uid}</span></p>
-                    {appData.mode === 'family' && (
-                        <div className="mt-4">
-                            <h3 className="font-semibold">Din familjekod</h3>
-                            <p className="text-sm text-gray-500">Dela denna kod med andra när inbjudningsfunktionen är klar.</p>
+                {appData.mode === 'family' && role === 'admin' && (
+                    <div className="bg-white p-6 rounded-lg shadow">
+                        <h2 className="text-xl font-bold mb-4">Familjeadministration</h2>
+                        <div className="mb-6">
+                            <h3 className="font-semibold mb-2">Anslutningsförfrågningar</h3>
+                            {joinRequests.length > 0 ? (
+                                <ul className="space-y-2">{joinRequests.map(req => (
+                                    <li key={req.docId} className="flex justify-between items-center bg-gray-50 p-2 rounded">
+                                        <span>{req.requesterName} vill gå med</span>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => handleApproveRequest(req)} className="bg-green-500 text-white px-3 py-1 text-sm rounded">Godkänn</button>
+                                            <button onClick={() => handleDenyRequest(req)} className="bg-red-500 text-white px-3 py-1 text-sm rounded">Neka</button>
+                                        </div>
+                                    </li>
+                                ))}</ul>
+                            ) : <p className="text-sm text-gray-500">Inga nya förfrågningar.</p>}
+                        </div>
+                        <div>
+                            <h3 className="font-semibold mb-2">Bjud in nya medlemmar</h3>
+                            <p className="text-sm text-gray-600">Dela familjekoden nedan.</p>
                             <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId}</p>
                         </div>
-                    )}
-                </div>
-                <div className="bg-white p-6 rounded-lg shadow">
-                     <h2 className="text-xl font-bold mb-4">Återställ</h2>
-                     <p className="text-sm text-gray-600 mb-4">Om något går fel eller om du vill börja om från början kan du radera din profil här.</p>
-                     <button 
-                        onClick={() => setShowDeleteModal(true)}
-                        className="w-full bg-red-500 text-white p-3 rounded-lg font-semibold hover:bg-red-600"
-                     >
+                    </div>
+                )}
+                 <div className="bg-white p-6 rounded-lg shadow">
+                     <h2 className="text-xl font-bold mb-4">Inställningar</h2>
+                      {appData.mode === 'family' && (
+                        <div className="flex items-center justify-between mb-4">
+                            <label htmlFor="privacy" className="font-semibold">Håll min garderob privat</label>
+                            <input type="checkbox" name="privacy" id="privacy" checked={currentUserData?.isPrivate || false} onChange={handlePrivacyToggle} />
+                        </div>
+                      )}
+                     <p className="text-sm text-gray-600 mb-4">Vill du börja om? Radera din profil här.</p>
+                     <button onClick={() => setShowDeleteModal(true)} className="w-full bg-red-500 text-white p-3 rounded-lg font-semibold hover:bg-red-600">
                         Radera min profil och börja om
                      </button>
                 </div>
@@ -306,17 +380,13 @@ function WardrobeView({ owner }) {
     const [garments, setGarments] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [garmentToDelete, setGarmentToDelete] = useState(null);
-
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
         if (!owner || !db) return;
         const q = query(collection(db, garmentsPath));
-        const unsubscribe = onSnapshot(q, snapshot => setGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
-        (error) => {
-            console.error(`Error fetching garments from ${garmentsPath}:`, error);
-        });
-        return () => unsubscribe();
+        const unsubscribe = onSnapshot(q, snapshot => setGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+        return unsubscribe;
     }, [garmentsPath, owner]);
 
     const addGarment = async (garmentData) => {
@@ -326,24 +396,20 @@ function WardrobeView({ owner }) {
 
     const confirmDelete = async () => {
         if (garmentToDelete) {
-            const garmentDocRef = doc(db, garmentsPath, garmentToDelete.id);
-            await deleteDoc(garmentDocRef);
+            await deleteDoc(doc(db, garmentsPath, garmentToDelete.id));
             setGarmentToDelete(null);
         }
     };
     
     const groupedGarments = garments.reduce((acc, garment) => {
         const category = garment.category || 'Övrigt';
-        if (!acc[category]) {
-            acc[category] = [];
-        }
+        if (!acc[category]) acc[category] = [];
         acc[category].push(garment);
         return acc;
     }, {});
 
     const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
     const sortedCategories = categories.filter(cat => groupedGarments[cat]).concat(Object.keys(groupedGarments).filter(cat => !categories.includes(cat)));
-
 
     return (
         <div>
@@ -375,10 +441,8 @@ function OutfitsView({ owner }) {
     const [showAddForm, setShowAddForm] = useState(false);
     const [availableGarments, setAvailableGarments] = useState([]);
     const [outfitToDelete, setOutfitToDelete] = useState(null);
-    
     const outfitsPath = `/artifacts/${appId}/users/${owner.id}/outfits`;
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
-
 
     useEffect(() => {
         if (!owner || !db) return;
@@ -394,8 +458,7 @@ function OutfitsView({ owner }) {
 
     const confirmDelete = async () => {
         if (outfitToDelete) {
-            const outfitPathToDelete = doc(db, outfitsPath, outfitToDelete.id);
-            await deleteDoc(outfitPathToDelete);
+            await deleteDoc(doc(db, outfitsPath, outfitToDelete.id));
             setOutfitToDelete(null);
         }
     };
