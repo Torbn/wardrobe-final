@@ -16,7 +16,34 @@ const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
 
 // --- Firebase Konfiguration ---
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+let firebaseConfig = null;
+let firebaseConfigForDebug = '';
+
+try {
+    // Denna variabel sätts av Vite/Netlify. `import.meta.env` kommer att orsaka ett fel i denna miljö.
+    const configStr = import.meta.env.VITE_FIREBASE_CONFIG;
+    if (configStr) {
+        firebaseConfigForDebug = configStr;
+        const cleaned = configStr.startsWith("'") && configStr.endsWith("'") ? configStr.slice(1, -1) : configStr;
+        firebaseConfig = JSON.parse(cleaned);
+    } else {
+         firebaseConfigForDebug = '!! VITE_FIREBASE_CONFIG är INTE DEFINIERAD (men import.meta finns) !!';
+    }
+} catch (e) {
+    // Denna block kommer att köras i förhandsvisningsmiljön eftersom `import.meta` inte finns.
+    if (typeof __firebase_config !== 'undefined') {
+        try {
+            firebaseConfig = JSON.parse(__firebase_config);
+            firebaseConfigForDebug = 'Använder förhandsvisningens inbyggda konfiguration.';
+        } catch (parseError) {
+            console.error("Failed to parse preview Firebase config:", parseError);
+            firebaseConfigForDebug = 'Misslyckades att läsa förhandsvisningens konfiguration.';
+        }
+    } else {
+         firebaseConfigForDebug = 'Kunde inte läsa konfiguration från varken import.meta.env eller __firebase_config.';
+    }
+}
+
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 let app;
@@ -95,7 +122,6 @@ export default function App() {
 
     useEffect(() => {
         if (!auth) {
-            setError("Firebase är inte konfigurerat.");
             setLoading(false);
             return;
         }
@@ -160,15 +186,42 @@ export default function App() {
         }
         setLoading(false);
     };
+    
+    // --- Felsökningskomponent ---
+    const DebugInfo = () => (
+        <div className="absolute top-0 left-0 right-0 bg-yellow-200 text-yellow-800 p-4 text-xs z-50">
+            <h3 className="font-bold">Felsökningsinformation:</h3>
+            <p>
+                <span className="font-semibold">Värdet av VITE_FIREBASE_CONFIG är:</span>
+                <pre className="whitespace-pre-wrap break-all bg-yellow-100 p-2 rounded mt-1">
+                    {firebaseConfigForDebug || '!! VITE_FIREBASE_CONFIG är INTE DEFINIERAD !!'}
+                </pre>
+            </p>
+        </div>
+    );
 
     if (loading) return <div className="flex items-center justify-center h-screen bg-gray-100"><div className="text-xl font-semibold">Laddar garderoben...</div></div>;
+    
+    if (!auth) {
+        return (
+             <div className="relative h-screen w-screen flex items-center justify-center bg-red-100">
+                <DebugInfo />
+                <div className="text-xl text-red-700 p-8 text-center">
+                    <p>Firebase är inte konfigurerat.</p>
+                    <p className="text-sm mt-2">Kontrollera felsökningsinformationen ovan.</p>
+                </div>
+            </div>
+        );
+    }
+    
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-    if (!auth) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">Firebase är inte konfigurerat.</div></div>;
-
 
     return (
-        <div className="h-screen w-screen bg-gray-100 antialiased">
-            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} error={error} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <div className="flex items-center justify-center h-screen">Loggar in...</div>}
+        <div className="h-screen w-screen bg-gray-100 antialiased relative">
+            <DebugInfo />
+            <div className="pt-20 h-full">
+                {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} error={error} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <div className="flex items-center justify-center h-full">Loggar in...</div>}
+            </div>
         </div>
     );
 }
@@ -178,7 +231,7 @@ function ProfileSetup({ onSetup, error }) {
     const [name, setName] = useState('');
 
     return (
-        <div className="flex items-center justify-center h-screen">
+        <div className="flex items-center justify-center h-full">
             <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
                 <h1 className="text-3xl font-bold mb-2">Välkommen!</h1>
                 <p className="text-gray-600 mb-6">Hur vill du använda appen?</p>
