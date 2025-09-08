@@ -1,10 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { 
-    getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
-    collection, onSnapshot, query, serverTimestamp, where
-} from 'firebase/firestore';
 
 // --- Helper-ikoner (SVG) ---
 const HomeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
@@ -15,38 +9,7 @@ const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-
 const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
 
-// --- Firebase Konfiguration ---
-let firebaseConfig = null;
-
-try {
-    const configStr = import.meta.env.VITE_FIREBASE_CONFIG;
-    if (configStr) {
-        const cleaned = configStr.startsWith("'") && configStr.endsWith("'") ? configStr.slice(1, -1) : configStr;
-        firebaseConfig = JSON.parse(cleaned);
-    }
-} catch (e) {
-    if (typeof __firebase_config !== 'undefined') {
-        try {
-            firebaseConfig = JSON.parse(__firebase_config);
-        } catch (parseError) {
-            console.error("Failed to parse preview Firebase config:", parseError);
-        }
-    }
-}
-
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-let app;
-let auth;
-let db;
-
-if (firebaseConfig) {
-    try {
-        app = initializeApp(firebaseConfig);
-        auth = getAuth(app);
-        db = getFirestore(app);
-    } catch (e) { console.error("Firebase initialization error:", e); }
-}
 
 // --- Bildhanteringsfunktion ---
 const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => new Promise((resolve, reject) => {
@@ -94,17 +57,61 @@ export default function App() {
     const [appData, setAppData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [firebaseServices, setFirebaseServices] = useState(null);
 
     useEffect(() => {
-        if (!auth) { setError("Firebase är inte konfigurerat."); setLoading(false); return; }
-        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+        const initFirebase = async () => {
+            try {
+                const { initializeApp } = await import('firebase/app');
+                const { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } = await import('firebase/auth');
+                const { getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, query, serverTimestamp, where } = await import('firebase/firestore');
+
+                let firebaseConfig = null;
+                if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FIREBASE_CONFIG) {
+                    const configStr = import.meta.env.VITE_FIREBASE_CONFIG;
+                    const cleaned = configStr.startsWith("'") && configStr.endsWith("'") ? configStr.slice(1, -1) : configStr;
+                    firebaseConfig = JSON.parse(cleaned);
+                } else if (typeof __firebase_config !== 'undefined') {
+                    firebaseConfig = JSON.parse(__firebase_config);
+                }
+
+                if (firebaseConfig) {
+                    const app = initializeApp(firebaseConfig);
+                    const auth = getAuth(app);
+                    const db = getFirestore(app);
+                    setFirebaseServices({ 
+                        auth, db, onAuthStateChanged, signInAnonymously, signInWithCustomToken,
+                        doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, query, serverTimestamp, where
+                    });
+                } else {
+                    setError("Firebase är inte konfigurerat.");
+                    setLoading(false);
+                }
+            } catch (e) {
+                console.error("Firebase initialization failed:", e);
+                setError("Kunde inte ladda Firebase.");
+                setLoading(false);
+            }
+        };
+        initFirebase();
+    }, []);
+
+    useEffect(() => {
+        if (!firebaseServices) return;
+
+        const { auth, db, onAuthStateChanged, signInAnonymously, signInWithCustomToken, doc, onSnapshot } = firebaseServices;
+
+        let unsubProfile = () => {};
+        const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+            unsubProfile(); 
+
             if (currentUser) {
                 setUser(currentUser);
                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                return onSnapshot(userDocRef, (userDocSnap) => {
+                unsubProfile = onSnapshot(userDocRef, (userDocSnap) => {
                     setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
                     setLoading(false);
-                }, () => setLoading(false));
+                }, () => { setError("Kunde inte hämta profil."); setLoading(false); });
             } else {
                  try {
                     if (typeof __initial_auth_token !== 'undefined') await signInWithCustomToken(auth, __initial_auth_token);
@@ -112,12 +119,18 @@ export default function App() {
                 } catch (err) { setError("Autentisering misslyckades."); setLoading(false); }
             }
         });
-        return () => unsubscribe();
-    }, []);
+
+        return () => {
+            unsubscribeAuth();
+            unsubProfile();
+        };
+    }, [firebaseServices]);
 
     const handleProfileSetup = async (name, mode) => {
-        if (!user) return; setLoading(true); setError('');
+        if (!user || !firebaseServices) return; setLoading(true); setError('');
         try {
+            const { db, doc, collection, setDoc, serverTimestamp } = firebaseServices;
+            
             const userProfile = { name, mode, familyId: null };
             if (mode === 'family') {
                 const familyId = doc(collection(db, '_')).id;
@@ -128,7 +141,7 @@ export default function App() {
                 });
                 const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
                 await setDoc(membershipDocRef, {
-                    userId: user.uid, familyId, name, role: 'admin', isPrivate: false,
+                    userId: user.uid, familyId, name, role: 'admin', isPrivate: false, joinedAt: serverTimestamp()
                 });
             }
             await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), userProfile);
@@ -137,14 +150,16 @@ export default function App() {
     };
 
     const handleJoinRequest = async (name, familyId) => {
-        if (!user || !name || !familyId) return; setLoading(true); setError('');
+        if (!user || !name || !familyId || !firebaseServices) return; setLoading(true); setError('');
         try {
+            const { db, doc, getDoc, collection, setDoc, serverTimestamp } = firebaseServices;
+
             const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
             if (!(await getDoc(familyDocRef)).exists()) throw new Error("Familjen finns inte.");
             
             const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
             await setDoc(joinRequestRef, {
-                familyId, requesterId: user.uid, requesterName: name, status: 'pending',
+                familyId, requesterId: user.uid, requesterName: name, status: 'pending', requestedAt: serverTimestamp()
             });
             await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), {
                 name, mode: 'family', status: 'pending', requestedFamilyId: familyId
@@ -155,13 +170,13 @@ export default function App() {
 
     if (loading) return <div className="flex items-center justify-center h-screen bg-gray-100"><div className="text-xl font-semibold">Laddar garderoben...</div></div>;
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-    if (!auth) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">Firebase är inte konfigurerat.</div></div>;
+    if (!firebaseServices) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">Firebase är inte konfigurerat.</div></div>;
     
     if (user && appData?.status === 'pending') return <PendingApprovalScreen />;
 
     return (
         <div className="h-screen w-screen bg-gray-100 antialiased">
-            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} error={error} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <div className="flex items-center justify-center h-screen">Loggar in...</div>}
+            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} error={error} /> : user && appData ? <WardrobeManager user={user} appData={appData} firebaseServices={firebaseServices} /> : <div className="flex items-center justify-center h-screen">Loggar in...</div>}
         </div>
     );
 }
@@ -216,10 +231,11 @@ function PendingApprovalScreen() {
 
 
 // --- Komponent: Huvudvy för Garderoben ---
-function WardrobeManager({ user, appData }) {
+function WardrobeManager({ user, appData, firebaseServices }) {
     const [currentView, setCurrentView] = useState('wardrobe');
     const [familyMembers, setFamilyMembers] = useState([]);
     const [currentWardrobeOwner, setCurrentWardrobeOwner] = useState({ id: user.uid, name: appData.name });
+    const { db, query, collection, where, onSnapshot } = firebaseServices;
 
     useEffect(() => {
         if (appData.mode === 'family' && appData.familyId) {
@@ -234,7 +250,7 @@ function WardrobeManager({ user, appData }) {
         } else {
              setFamilyMembers([{ id: user.uid, name: appData.name, type: 'full' }]);
         }
-    }, [appData.familyId, appData.mode, user.uid, appData.name]);
+    }, [appData.familyId, appData.mode, user.uid, appData.name, db, query, collection, where, onSnapshot]);
     
     const visibleMembers = useMemo(() => {
         if (appData.mode !== 'family') return [{ id: user.uid, name: appData.name, type: 'full' }];
@@ -248,10 +264,10 @@ function WardrobeManager({ user, appData }) {
 
     const renderContent = () => {
         switch (currentView) {
-            case 'wardrobe': return <WardrobeView owner={currentWardrobeOwner} />;
-            case 'outfits': return <OutfitsView owner={currentWardrobeOwner} />;
-            case 'chat': return <p>Chatt är under utveckling.</p>;
-            case 'settings': return <SettingsView user={user} appData={appData} members={familyMembers} />;
+            case 'wardrobe': return <WardrobeView owner={currentWardrobeOwner} firebaseServices={firebaseServices} />;
+            case 'outfits': return <OutfitsView owner={currentWardrobeOwner} firebaseServices={firebaseServices} />;
+            case 'chat': return <p className="text-center mt-8 text-gray-500">Chatt är under utveckling.</p>;
+            case 'settings': return <SettingsView user={user} appData={appData} members={familyMembers} firebaseServices={firebaseServices} />;
             default: return null;
         }
     };
@@ -262,7 +278,8 @@ function WardrobeManager({ user, appData }) {
                 <h1 className="text-xl font-bold text-center sm:text-left">{currentWardrobeOwner.name}'s Garderob</h1>
                 {appData.mode === 'family' && (
                     <div className="flex items-center gap-4">
-                        <select value={currentWardrobeOwner.id} onChange={e => { const selected = visibleMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
+                        <label htmlFor="member_select" className="sr-only">Välj familjemedlem</label>
+                        <select id="member_select" value={currentWardrobeOwner.id} onChange={e => { const selected = visibleMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
                            {visibleMembers.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
                         </select>
                     </div>
@@ -280,11 +297,12 @@ function WardrobeManager({ user, appData }) {
 }
 
 // --- Komponent: Inställningar ---
-function SettingsView({ user, appData, members = [] }) {
+function SettingsView({ user, appData, members = [], firebaseServices }) {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [joinRequests, setJoinRequests] = useState([]);
     const currentUserData = members.find(m => m.id === user.uid);
     const role = currentUserData?.role;
+    const { db, query, collection, where, onSnapshot, doc, updateDoc, setDoc, deleteDoc, serverTimestamp } = firebaseServices;
 
     useEffect(() => {
         if (role === 'admin' && appData.familyId) {
@@ -294,7 +312,7 @@ function SettingsView({ user, appData, members = [] }) {
             });
             return unsubscribe;
         }
-    }, [role, appData.familyId]);
+    }, [role, appData.familyId, db, query, collection, where, onSnapshot]);
 
     const handlePrivacyToggle = async (e) => {
         if (!currentUserData?.docId) return;
@@ -305,7 +323,7 @@ function SettingsView({ user, appData, members = [] }) {
     const handleApproveRequest = async (request) => {
         const membershipRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
         await setDoc(membershipRef, {
-            userId: request.requesterId, familyId: request.familyId, name: request.requesterName, role: 'member', isPrivate: false,
+            userId: request.requesterId, familyId: request.familyId, name: request.requesterName, role: 'member', isPrivate: false, joinedAt: serverTimestamp()
         });
         const userProfileRef = doc(db, `/artifacts/${appId}/users/${request.requesterId}/profile/main`);
         await updateDoc(userProfileRef, { status: 'approved', familyId: request.familyId });
@@ -321,7 +339,6 @@ function SettingsView({ user, appData, members = [] }) {
     const handleDeleteProfile = async () => {
         const profileDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
         await deleteDoc(profileDocRef);
-        // Ytterligare logik för att radera medlemskap etc. kan läggas till här
         setShowDeleteModal(false);
     };
 
@@ -348,7 +365,7 @@ function SettingsView({ user, appData, members = [] }) {
                                 ))}</ul>
                             ) : <p className="text-sm text-gray-500">Inga nya förfrågningar.</p>}
                         </div>
-                        <div>
+                         <div>
                             <h3 className="font-semibold mb-2">Bjud in nya medlemmar</h3>
                             <p className="text-sm text-gray-600">Dela familjekoden nedan.</p>
                             <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId}</p>
@@ -360,7 +377,7 @@ function SettingsView({ user, appData, members = [] }) {
                       {appData.mode === 'family' && (
                         <div className="flex items-center justify-between mb-4">
                             <label htmlFor="privacy" className="font-semibold">Håll min garderob privat</label>
-                            <input type="checkbox" name="privacy" id="privacy" checked={currentUserData?.isPrivate || false} onChange={handlePrivacyToggle} />
+                            <input type="checkbox" name="privacy" id="privacy" checked={currentUserData?.isPrivate || false} onChange={handlePrivacyToggle} className="h-6 w-6 rounded text-blue-600 focus:ring-blue-500 border-gray-300"/>
                         </div>
                       )}
                      <p className="text-sm text-gray-600 mb-4">Vill du börja om? Radera din profil här.</p>
@@ -373,28 +390,30 @@ function SettingsView({ user, appData, members = [] }) {
     );
 }
 
-
 // --- Komponent: Plagg-vyn ---
-function WardrobeView({ owner }) {
+function WardrobeView({ owner, firebaseServices }) {
     const [garments, setGarments] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [garmentToDelete, setGarmentToDelete] = useState(null);
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
-        if (!owner || !db) return;
+        if (!owner || !firebaseServices) return;
+        const { db, query, collection, onSnapshot } = firebaseServices;
         const q = query(collection(db, garmentsPath));
         const unsubscribe = onSnapshot(q, snapshot => setGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
         return unsubscribe;
-    }, [garmentsPath, owner]);
+    }, [garmentsPath, owner, firebaseServices]);
 
     const addGarment = async (garmentData) => {
+        const { db, collection, addDoc, serverTimestamp } = firebaseServices;
         await addDoc(collection(db, garmentsPath), { ...garmentData, createdAt: serverTimestamp() });
         setShowAddForm(false);
     };
 
     const confirmDelete = async () => {
         if (garmentToDelete) {
+            const { db, doc, deleteDoc } = firebaseServices;
             await deleteDoc(doc(db, garmentsPath, garmentToDelete.id));
             setGarmentToDelete(null);
         }
@@ -435,7 +454,7 @@ function WardrobeView({ owner }) {
 }
 
 // --- Komponent: Outfit-vyn ---
-function OutfitsView({ owner }) {
+function OutfitsView({ owner, firebaseServices }) {
     const [outfits, setOutfits] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [availableGarments, setAvailableGarments] = useState([]);
@@ -444,19 +463,22 @@ function OutfitsView({ owner }) {
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
-        if (!owner || !db) return;
+        if (!owner || !firebaseServices) return;
+        const { db, query, collection, onSnapshot } = firebaseServices;
         const unsubGarments = onSnapshot(query(collection(db, garmentsPath)), snapshot => setAvailableGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
         const unsubOutfits = onSnapshot(query(collection(db, outfitsPath)), snapshot => setOutfits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
         return () => { unsubGarments(); unsubOutfits(); };
-    }, [garmentsPath, outfitsPath, owner]);
+    }, [garmentsPath, outfitsPath, owner, firebaseServices]);
 
     const addOutfit = async (outfitData) => {
+        const { db, collection, addDoc, serverTimestamp } = firebaseServices;
         await addDoc(collection(db, outfitsPath), { ...outfitData, createdAt: serverTimestamp() });
         setShowAddForm(false);
     };
 
     const confirmDelete = async () => {
         if (outfitToDelete) {
+            const { db, doc, deleteDoc } = firebaseServices;
             await deleteDoc(doc(db, outfitsPath, outfitToDelete.id));
             setOutfitToDelete(null);
         }
@@ -477,7 +499,6 @@ function OutfitsView({ owner }) {
         </div>
     );
 }
-
 
 // --- Komponent: Plagg-kort ---
 function GarmentCard({ garment, onDelete }) {
