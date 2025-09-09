@@ -1,4 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { 
+    getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
+    collection, onSnapshot, query, serverTimestamp, where
+} from 'firebase/firestore';
 
 // --- Helper-ikoner (SVG) ---
 const HomeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
@@ -9,7 +15,21 @@ const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-
 const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
 
+// --- Firebase Konfiguration ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+let app;
+let auth;
+let db;
+
+if (Object.keys(firebaseConfig).length > 0) {
+    try {
+        app = initializeApp(firebaseConfig);
+        auth = getAuth(app);
+        db = getFirestore(app);
+    } catch (e) { console.error("Firebase initialization error:", e); }
+}
 
 // --- Bildhanteringsfunktion ---
 const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => new Promise((resolve, reject) => {
@@ -51,86 +71,71 @@ function Modal({ isOpen, onClose, onConfirm, title, children, confirmText = "Bek
     );
 }
 
+// --- Komponent för Skelettladdare ---
+function SkeletonLoader() {
+    return (
+        <div className="flex flex-col h-full animate-pulse">
+            <header className="bg-gray-200 h-16 w-full p-4 mb-4"></header>
+            <main className="flex-grow p-4 space-y-8">
+                <div className="h-8 bg-gray-300 rounded w-1/3"></div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg"></div>
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg"></div>
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg hidden sm:block"></div>
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg hidden md:block"></div>
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg hidden lg:block"></div>
+                </div>
+                 <div className="h-8 bg-gray-300 rounded w-1/4 mt-8"></div>
+                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg"></div>
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg"></div>
+                </div>
+            </main>
+            <nav className="fixed bottom-0 left-0 right-0 bg-gray-200 h-16 border-t"></nav>
+        </div>
+    );
+}
+
+
 // --- Huvudkomponent: App ---
 export default function App() {
     const [user, setUser] = useState(null);
     const [appData, setAppData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [firebaseServices, setFirebaseServices] = useState(null);
 
     useEffect(() => {
-        const initFirebase = async () => {
-            try {
-                const { initializeApp } = await import('firebase/app');
-                const { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } = await import('firebase/auth');
-                const { getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, query, serverTimestamp, where } = await import('firebase/firestore');
-
-                let firebaseConfig = null;
-                if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FIREBASE_CONFIG) {
-                    const configStr = import.meta.env.VITE_FIREBASE_CONFIG;
-                    const cleaned = configStr.startsWith("'") && configStr.endsWith("'") ? configStr.slice(1, -1) : configStr;
-                    firebaseConfig = JSON.parse(cleaned);
-                } else if (typeof __firebase_config !== 'undefined') {
-                    firebaseConfig = JSON.parse(__firebase_config);
-                }
-
-                if (firebaseConfig) {
-                    const app = initializeApp(firebaseConfig);
-                    const auth = getAuth(app);
-                    const db = getFirestore(app);
-                    setFirebaseServices({ 
-                        auth, db, onAuthStateChanged, signInAnonymously, signInWithCustomToken,
-                        doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, query, serverTimestamp, where
-                    });
-                } else {
-                    setError("Firebase är inte konfigurerat.");
-                    setLoading(false);
-                }
-            } catch (e) {
-                console.error("Firebase initialization failed:", e);
-                setError("Kunde inte ladda Firebase.");
-                setLoading(false);
-            }
-        };
-        initFirebase();
-    }, []);
-
-    useEffect(() => {
-        if (!firebaseServices) return;
-
-        const { auth, db, onAuthStateChanged, signInAnonymously, signInWithCustomToken, doc, onSnapshot } = firebaseServices;
-
-        let unsubProfile = () => {};
-        const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
-            unsubProfile(); 
-
+        if (!auth) { setError("Firebase kunde inte ansluta."); setLoading(false); return; }
+        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                unsubProfile = onSnapshot(userDocRef, (userDocSnap) => {
+                const unsubscribeSnapshot = onSnapshot(userDocRef, (userDocSnap) => {
                     setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
                     setLoading(false);
-                }, () => { setError("Kunde inte hämta profil."); setLoading(false); });
+                }, (err) => {
+                    console.error("Snapshot error:", err);
+                    setError("Kunde inte hämta profildata.");
+                    setLoading(false);
+                });
+                return () => unsubscribeSnapshot();
             } else {
                  try {
-                    if (typeof __initial_auth_token !== 'undefined') await signInWithCustomToken(auth, __initial_auth_token);
-                    else await signInAnonymously(auth);
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
                 } catch (err) { setError("Autentisering misslyckades."); setLoading(false); }
             }
         });
-
-        return () => {
-            unsubscribeAuth();
-            unsubProfile();
-        };
-    }, [firebaseServices]);
+        return () => unsubscribe();
+    }, []);
 
     const handleProfileSetup = async (name, mode) => {
-        if (!user || !firebaseServices) return; setLoading(true); setError('');
+        if (!user) return; 
+        setError('');
         try {
-            const { db, doc, collection, setDoc, serverTimestamp } = firebaseServices;
-            
             const userProfile = { name, mode, familyId: null };
             if (mode === 'family') {
                 const familyId = doc(collection(db, '_')).id;
@@ -141,51 +146,82 @@ export default function App() {
                 });
                 const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
                 await setDoc(membershipDocRef, {
-                    userId: user.uid, familyId, name, role: 'admin', isPrivate: false, joinedAt: serverTimestamp()
+                    userId: user.uid, familyId, name, role: 'admin', isPrivate: false,
                 });
             }
             await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), userProfile);
-        } catch (e) { console.error("Profile setup error: ", e); setError("Kunde inte skapa profilen."); }
-        setLoading(false);
+        } catch (e) { 
+            console.error("Profile setup error: ", e); 
+            setError("Kunde inte skapa profilen."); 
+            throw e; // Kasta om felet så att anropande funktion vet att det misslyckades
+        }
     };
 
     const handleJoinRequest = async (name, familyId) => {
-        if (!user || !name || !familyId || !firebaseServices) return; setLoading(true); setError('');
+        if (!user || !name || !familyId) return; 
+        setError('');
         try {
-            const { db, doc, getDoc, collection, setDoc, serverTimestamp } = firebaseServices;
-
             const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
             if (!(await getDoc(familyDocRef)).exists()) throw new Error("Familjen finns inte.");
-            
+             
             const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
             await setDoc(joinRequestRef, {
-                familyId, requesterId: user.uid, requesterName: name, status: 'pending', requestedAt: serverTimestamp()
+                familyId, requesterId: user.uid, requesterName: name, status: 'pending',
             });
             await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), {
                 name, mode: 'family', status: 'pending', requestedFamilyId: familyId
             });
-        } catch(e) { console.error("Join request error:", e); setError(e.message || "Kunde inte skicka förfrågan."); }
-        setLoading(false);
+        } catch(e) { 
+            console.error("Join request error:", e); 
+            setError(e.message || "Kunde inte skicka förfrågan."); 
+            throw e; // Kasta om felet
+        }
     }
 
-    if (loading) return <div className="flex items-center justify-center h-screen bg-gray-100"><div className="text-xl font-semibold">Laddar garderoben...</div></div>;
+    if (loading) return <SkeletonLoader />;
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-    if (!firebaseServices) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">Firebase är inte konfigurerat.</div></div>;
-    
+    if (!auth) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">Firebase är inte konfigurerat.</div></div>;
+     
     if (user && appData?.status === 'pending') return <PendingApprovalScreen />;
 
     return (
         <div className="h-screen w-screen bg-gray-100 antialiased">
-            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} error={error} /> : user && appData ? <WardrobeManager user={user} appData={appData} firebaseServices={firebaseServices} /> : <div className="flex items-center justify-center h-screen">Loggar in...</div>}
+            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <SkeletonLoader />}
         </div>
     );
 }
 
 // --- Komponent: Profil-setup ---
-function ProfileSetup({ onSetup, onJoinRequest, error }) {
+function ProfileSetup({ onSetup, onJoinRequest }) {
     const [name, setName] = useState('');
     const [joinFamilyId, setJoinFamilyId] = useState('');
     const [view, setView] = useState('main');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleJoin = async () => {
+        if (!name || !joinFamilyId || isSubmitting) return;
+        setIsSubmitting(true);
+        setError('');
+        try {
+            await onJoinRequest(name, joinFamilyId);
+        } catch (e) {
+            setError(e.message || 'Kunde inte skicka förfrågan.');
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleSetup = async (mode) => {
+        if (!name || isSubmitting) return;
+        setIsSubmitting(true);
+        setError('');
+        try {
+            await onSetup(name, mode);
+        } catch (e) {
+            setError('Kunde inte skapa profilen.');
+            setIsSubmitting(false);
+        }
+    };
 
     if (view === 'join') {
         return (
@@ -195,7 +231,9 @@ function ProfileSetup({ onSetup, onJoinRequest, error }) {
                     {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
                     <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ditt namn" className="w-full p-2 border rounded mb-4" />
                     <input type="text" value={joinFamilyId} onChange={e => setJoinFamilyId(e.target.value)} placeholder="Familjekod" className="w-full p-2 border rounded mb-4" />
-                    <button onClick={() => onJoinRequest(name, joinFamilyId)} disabled={!name || !joinFamilyId} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-300">Skicka förfrågan</button>
+                    <button onClick={handleJoin} disabled={!name || !joinFamilyId || isSubmitting} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                        {isSubmitting ? 'Skickar...' : 'Skicka förfrågan'}
+                    </button>
                     <button onClick={() => setView('main')} className="mt-4 text-sm text-gray-600">Tillbaka</button>
                 </div>
             </div>
@@ -210,9 +248,13 @@ function ProfileSetup({ onSetup, onJoinRequest, error }) {
                 {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
                 <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ange ditt namn" className="w-full p-3 border rounded-lg mb-4 text-center" />
                 <div className="space-y-3">
-                    <button onClick={() => onSetup(name, 'personal')} disabled={!name} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-300">Bara för mig</button>
-                    <button onClick={() => onSetup(name, 'family')} disabled={!name} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-300">Skapa en familj</button>
-                    <button onClick={() => setView('join')} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
+                    <button onClick={() => handleSetup('personal')} disabled={!name || isSubmitting} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-400">
+                        {isSubmitting ? 'Konfigurerar...' : 'Bara för mig'}
+                    </button>
+                    <button onClick={() => handleSetup('family')} disabled={!name || isSubmitting} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                        {isSubmitting ? 'Konfigurerar...' : 'Skapa en familj'}
+                    </button>
+                    <button onClick={() => setView('join')} disabled={isSubmitting} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
                 </div>
             </div>
         </div>
@@ -231,11 +273,10 @@ function PendingApprovalScreen() {
 
 
 // --- Komponent: Huvudvy för Garderoben ---
-function WardrobeManager({ user, appData, firebaseServices }) {
+function WardrobeManager({ user, appData }) {
     const [currentView, setCurrentView] = useState('wardrobe');
     const [familyMembers, setFamilyMembers] = useState([]);
     const [currentWardrobeOwner, setCurrentWardrobeOwner] = useState({ id: user.uid, name: appData.name });
-    const { db, query, collection, where, onSnapshot } = firebaseServices;
 
     useEffect(() => {
         if (appData.mode === 'family' && appData.familyId) {
@@ -250,13 +291,13 @@ function WardrobeManager({ user, appData, firebaseServices }) {
         } else {
              setFamilyMembers([{ id: user.uid, name: appData.name, type: 'full' }]);
         }
-    }, [appData.familyId, appData.mode, user.uid, appData.name, db, query, collection, where, onSnapshot]);
-    
+    }, [appData.familyId, appData.mode, user.uid, appData.name]);
+     
     const visibleMembers = useMemo(() => {
         if (appData.mode !== 'family') return [{ id: user.uid, name: appData.name, type: 'full' }];
         return familyMembers.filter(m => m.id === user.uid || !m.isPrivate);
     }, [familyMembers, user.uid, appData]);
-    
+     
     useEffect(() => {
         const self = familyMembers.find(m => m.id === user.uid) || { id: user.uid, name: appData.name };
         setCurrentWardrobeOwner(self);
@@ -264,22 +305,21 @@ function WardrobeManager({ user, appData, firebaseServices }) {
 
     const renderContent = () => {
         switch (currentView) {
-            case 'wardrobe': return <WardrobeView owner={currentWardrobeOwner} firebaseServices={firebaseServices} />;
-            case 'outfits': return <OutfitsView owner={currentWardrobeOwner} firebaseServices={firebaseServices} />;
-            case 'chat': return <p className="text-center mt-8 text-gray-500">Chatt är under utveckling.</p>;
-            case 'settings': return <SettingsView user={user} appData={appData} members={familyMembers} firebaseServices={firebaseServices} />;
+            case 'wardrobe': return <WardrobeView owner={currentWardrobeOwner} />;
+            case 'outfits': return <OutfitsView owner={currentWardrobeOwner} />;
+            case 'chat': return <p>Chatt är under utveckling.</p>;
+            case 'settings': return <SettingsView user={user} appData={appData} members={familyMembers} />;
             default: return null;
         }
     };
-    
+     
     return (
         <div className="flex flex-col h-full">
             <header className="bg-white shadow-md p-4 flex flex-col sm:flex-row justify-between items-center gap-4">
                 <h1 className="text-xl font-bold text-center sm:text-left">{currentWardrobeOwner.name}'s Garderob</h1>
                 {appData.mode === 'family' && (
                     <div className="flex items-center gap-4">
-                        <label htmlFor="member_select" className="sr-only">Välj familjemedlem</label>
-                        <select id="member_select" value={currentWardrobeOwner.id} onChange={e => { const selected = visibleMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
+                        <select value={currentWardrobeOwner.id} onChange={e => { const selected = visibleMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
                            {visibleMembers.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
                         </select>
                     </div>
@@ -297,12 +337,11 @@ function WardrobeManager({ user, appData, firebaseServices }) {
 }
 
 // --- Komponent: Inställningar ---
-function SettingsView({ user, appData, members = [], firebaseServices }) {
+function SettingsView({ user, appData, members = [] }) {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [joinRequests, setJoinRequests] = useState([]);
     const currentUserData = members.find(m => m.id === user.uid);
     const role = currentUserData?.role;
-    const { db, query, collection, where, onSnapshot, doc, updateDoc, setDoc, deleteDoc, serverTimestamp } = firebaseServices;
 
     useEffect(() => {
         if (role === 'admin' && appData.familyId) {
@@ -312,7 +351,7 @@ function SettingsView({ user, appData, members = [], firebaseServices }) {
             });
             return unsubscribe;
         }
-    }, [role, appData.familyId, db, query, collection, where, onSnapshot]);
+    }, [role, appData.familyId]);
 
     const handlePrivacyToggle = async (e) => {
         if (!currentUserData?.docId) return;
@@ -323,7 +362,7 @@ function SettingsView({ user, appData, members = [], firebaseServices }) {
     const handleApproveRequest = async (request) => {
         const membershipRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
         await setDoc(membershipRef, {
-            userId: request.requesterId, familyId: request.familyId, name: request.requesterName, role: 'member', isPrivate: false, joinedAt: serverTimestamp()
+            userId: request.requesterId, familyId: request.familyId, name: request.requesterName, role: 'member', isPrivate: false,
         });
         const userProfileRef = doc(db, `/artifacts/${appId}/users/${request.requesterId}/profile/main`);
         await updateDoc(userProfileRef, { status: 'approved', familyId: request.familyId });
@@ -339,6 +378,7 @@ function SettingsView({ user, appData, members = [], firebaseServices }) {
     const handleDeleteProfile = async () => {
         const profileDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
         await deleteDoc(profileDocRef);
+        // Ytterligare logik för att radera medlemskap etc. kan läggas till här
         setShowDeleteModal(false);
     };
 
@@ -365,7 +405,7 @@ function SettingsView({ user, appData, members = [], firebaseServices }) {
                                 ))}</ul>
                             ) : <p className="text-sm text-gray-500">Inga nya förfrågningar.</p>}
                         </div>
-                         <div>
+                        <div>
                             <h3 className="font-semibold mb-2">Bjud in nya medlemmar</h3>
                             <p className="text-sm text-gray-600">Dela familjekoden nedan.</p>
                             <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId}</p>
@@ -377,7 +417,7 @@ function SettingsView({ user, appData, members = [], firebaseServices }) {
                       {appData.mode === 'family' && (
                         <div className="flex items-center justify-between mb-4">
                             <label htmlFor="privacy" className="font-semibold">Håll min garderob privat</label>
-                            <input type="checkbox" name="privacy" id="privacy" checked={currentUserData?.isPrivate || false} onChange={handlePrivacyToggle} className="h-6 w-6 rounded text-blue-600 focus:ring-blue-500 border-gray-300"/>
+                            <input type="checkbox" name="privacy" id="privacy" checked={currentUserData?.isPrivate || false} onChange={handlePrivacyToggle} />
                         </div>
                       )}
                      <p className="text-sm text-gray-600 mb-4">Vill du börja om? Radera din profil här.</p>
@@ -390,35 +430,33 @@ function SettingsView({ user, appData, members = [], firebaseServices }) {
     );
 }
 
+
 // --- Komponent: Plagg-vyn ---
-function WardrobeView({ owner, firebaseServices }) {
+function WardrobeView({ owner }) {
     const [garments, setGarments] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [garmentToDelete, setGarmentToDelete] = useState(null);
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
-        if (!owner || !firebaseServices) return;
-        const { db, query, collection, onSnapshot } = firebaseServices;
+        if (!owner || !db) return;
         const q = query(collection(db, garmentsPath));
         const unsubscribe = onSnapshot(q, snapshot => setGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
         return unsubscribe;
-    }, [garmentsPath, owner, firebaseServices]);
+    }, [garmentsPath, owner]);
 
     const addGarment = async (garmentData) => {
-        const { db, collection, addDoc, serverTimestamp } = firebaseServices;
         await addDoc(collection(db, garmentsPath), { ...garmentData, createdAt: serverTimestamp() });
         setShowAddForm(false);
     };
 
     const confirmDelete = async () => {
         if (garmentToDelete) {
-            const { db, doc, deleteDoc } = firebaseServices;
             await deleteDoc(doc(db, garmentsPath, garmentToDelete.id));
             setGarmentToDelete(null);
         }
     };
-    
+     
     const groupedGarments = garments.reduce((acc, garment) => {
         const category = garment.category || 'Övrigt';
         if (!acc[category]) acc[category] = [];
@@ -454,7 +492,7 @@ function WardrobeView({ owner, firebaseServices }) {
 }
 
 // --- Komponent: Outfit-vyn ---
-function OutfitsView({ owner, firebaseServices }) {
+function OutfitsView({ owner }) {
     const [outfits, setOutfits] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [availableGarments, setAvailableGarments] = useState([]);
@@ -463,22 +501,19 @@ function OutfitsView({ owner, firebaseServices }) {
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
-        if (!owner || !firebaseServices) return;
-        const { db, query, collection, onSnapshot } = firebaseServices;
+        if (!owner || !db) return;
         const unsubGarments = onSnapshot(query(collection(db, garmentsPath)), snapshot => setAvailableGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
         const unsubOutfits = onSnapshot(query(collection(db, outfitsPath)), snapshot => setOutfits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
         return () => { unsubGarments(); unsubOutfits(); };
-    }, [garmentsPath, outfitsPath, owner, firebaseServices]);
+    }, [garmentsPath, outfitsPath, owner]);
 
     const addOutfit = async (outfitData) => {
-        const { db, collection, addDoc, serverTimestamp } = firebaseServices;
         await addDoc(collection(db, outfitsPath), { ...outfitData, createdAt: serverTimestamp() });
         setShowAddForm(false);
     };
 
     const confirmDelete = async () => {
         if (outfitToDelete) {
-            const { db, doc, deleteDoc } = firebaseServices;
             await deleteDoc(doc(db, outfitsPath, outfitToDelete.id));
             setOutfitToDelete(null);
         }
@@ -499,6 +534,7 @@ function OutfitsView({ owner, firebaseServices }) {
         </div>
     );
 }
+
 
 // --- Komponent: Plagg-kort ---
 function GarmentCard({ garment, onDelete }) {
@@ -566,7 +602,7 @@ function AddGarmentForm({ onAdd, onCancel }) {
             reader.readAsDataURL(file);
         }
     };
-    
+     
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsUploading(true);
@@ -602,7 +638,7 @@ function AddGarmentForm({ onAdd, onCancel }) {
             <h2 className="text-2xl font-bold mb-4">Lägg till nytt plagg</h2>
             {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
             <form onSubmit={handleSubmit} className="space-y-4">
-                <label htmlFor="garment-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="garment-image-upload" type="file" className="hidden" accept="image/*" capture="environment" onChange={handleImageChange}/></label>
+                <label htmlFor="garment-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="garment-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
                 <input type="text" placeholder="Plaggets namn (ex. Blå T-shirt)" value={name} onChange={e => setName(e.target.value)} required className="w-full p-2 border rounded"/>
                 <select value={category} onChange={e => setCategory(e.target.value)} className="w-full p-2 border rounded">{categories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                 <input type="text" placeholder="Storlek" value={size} onChange={e => setSize(e.target.value)} className="w-full p-2 border rounded"/>
@@ -641,7 +677,7 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         else newSelection.add(garmentId);
         setSelectedGarmentIds(newSelection);
     };
-    
+     
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsUploading(true);
@@ -657,7 +693,7 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
                 return;
             }
         }
-        
+         
         const linkedGarments = availableGarments.filter(g => selectedGarmentIds.has(g.id)).map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '' }));
 
         try {
@@ -679,7 +715,7 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
             <h2 className="text-2xl font-bold mb-4">Skapa ny Outfit</h2>
             {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
             <form onSubmit={handleSubmit} className="space-y-4">
-                <label htmlFor="outfit-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="outfit-image-upload" type="file" className="hidden" accept="image/*" capture="environment" onChange={handleImageChange}/></label>
+                <label htmlFor="outfit-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="outfit-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
                 <input type="text" placeholder="Outfitens namn" value={name} onChange={e => setName(e.target.value)} required className="w-full p-2 border rounded"/>
                 <textarea placeholder="Anteckningar" value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-2 border rounded"></textarea>
                 <div>
