@@ -21,28 +21,6 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 let app;
 let auth;
 let db;
-let firebaseInitError = null; // To hold a potential error message
-
-// This self-invoking function encapsulates the initialization logic safely.
-(function initializeFirebase() {
-    try {
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-            const firebaseConfig = JSON.parse(__firebase_config);
-            if (firebaseConfig && firebaseConfig.apiKey) {
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-            } else {
-                throw new Error("Parsed Firebase config is invalid.");
-            }
-        } else {
-            throw new Error("Firebase config variable is not available.");
-        }
-    } catch (e) {
-        console.error("Firebase Initialization Error:", e);
-        firebaseInitError = e.message;
-    }
-})();
 
 // --- Bildhanteringsfunktion ---
 const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => new Promise((resolve, reject) => {
@@ -116,19 +94,39 @@ export default function App() {
     const [appData, setAppData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [firebaseReady, setFirebaseReady] = useState(false);
 
+    // Effect for Firebase Initialization, runs once on component mount.
     useEffect(() => {
-        if (firebaseInitError) {
-            setError(`Firebase kunde inte ansluta: ${firebaseInitError}`);
-            setLoading(false);
-            return;
-        }
-        if (!auth) { 
-            setError("Firebase-konfigurationen kunde inte laddas.");
-            setLoading(false); 
-            return; 
-        }
-        
+        // We use a small timeout to ensure the environment has time to inject global variables.
+        const timer = setTimeout(() => {
+            try {
+                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                    const firebaseConfig = JSON.parse(__firebase_config);
+                    if (firebaseConfig && firebaseConfig.apiKey) {
+                        app = initializeApp(firebaseConfig);
+                        auth = getAuth(app);
+                        db = getFirestore(app);
+                        setFirebaseReady(true); // Signal that Firebase is ready
+                        return;
+                    }
+                }
+                // If we reach here, the config was not available or invalid.
+                throw new Error("Firebase config variable is not available.");
+            } catch (e) {
+                console.error("Firebase Initialization Error:", e);
+                setError(`Firebase kunde inte ansluta: ${e.message}`);
+                setLoading(false);
+            }
+        }, 100);
+
+        return () => clearTimeout(timer); // Cleanup timer on unmount
+    }, []);
+
+    // Effect for handling Authentication, runs when Firebase is ready.
+    useEffect(() => {
+        if (!firebaseReady) return; // Wait for initialization to complete
+
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
@@ -153,7 +151,7 @@ export default function App() {
             }
         });
         return () => unsubscribe();
-    }, []);
+    }, [firebaseReady]); // This effect depends on firebase readiness
 
     const handleProfileSetup = async (name, mode) => {
         if (!user) return; 
@@ -203,7 +201,6 @@ export default function App() {
 
     if (loading) return <SkeletonLoader />;
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-    if (!auth) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">Firebase är inte konfigurerat.</div></div>;
      
     if (user && appData?.status === 'pending') return <PendingApprovalScreen />;
 
@@ -759,5 +756,4 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         </div>
     );
 }
-
 
