@@ -16,20 +16,33 @@ const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
 
 // --- Firebase Konfiguration ---
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 let app;
 let auth;
 let db;
+let firebaseInitError = null; // To hold a potential error message
 
-if (Object.keys(firebaseConfig).length > 0) {
+// This self-invoking function encapsulates the initialization logic safely.
+(function initializeFirebase() {
     try {
-        app = initializeApp(firebaseConfig);
-        auth = getAuth(app);
-        db = getFirestore(app);
-    } catch (e) { console.error("Firebase initialization error:", e); }
-}
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            if (firebaseConfig && firebaseConfig.apiKey) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            } else {
+                throw new Error("Parsed Firebase config is invalid.");
+            }
+        } else {
+            throw new Error("Firebase config variable is not available.");
+        }
+    } catch (e) {
+        console.error("Firebase Initialization Error:", e);
+        firebaseInitError = e.message;
+    }
+})();
 
 // --- Bildhanteringsfunktion ---
 const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => new Promise((resolve, reject) => {
@@ -105,7 +118,17 @@ export default function App() {
     const [error, setError] = useState('');
 
     useEffect(() => {
-        if (!auth) { setError("Firebase kunde inte ansluta."); setLoading(false); return; }
+        if (firebaseInitError) {
+            setError(`Firebase kunde inte ansluta: ${firebaseInitError}`);
+            setLoading(false);
+            return;
+        }
+        if (!auth) { 
+            setError("Firebase-konfigurationen kunde inte laddas.");
+            setLoading(false); 
+            return; 
+        }
+        
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
@@ -736,4 +759,5 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         </div>
     );
 }
+
 
