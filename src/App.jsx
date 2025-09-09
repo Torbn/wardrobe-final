@@ -98,30 +98,42 @@ export default function App() {
 
     // Effect for Firebase Initialization, runs once on component mount.
     useEffect(() => {
-        // We use a small timeout to ensure the environment has time to inject global variables.
-        const timer = setTimeout(() => {
-            try {
-                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+        const maxWaitTime = 5000; // 5 seconds timeout
+        const pollInterval = 100; // check every 100ms
+        let elapsedTime = 0;
+
+        const intervalId = setInterval(() => {
+            elapsedTime += pollInterval;
+
+            // Check if the global config variable is available
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                clearInterval(intervalId); // Stop polling
+                try {
                     const firebaseConfig = JSON.parse(__firebase_config);
                     if (firebaseConfig && firebaseConfig.apiKey) {
                         app = initializeApp(firebaseConfig);
                         auth = getAuth(app);
                         db = getFirestore(app);
                         setFirebaseReady(true); // Signal that Firebase is ready
-                        return;
+                    } else {
+                        throw new Error("Parsed Firebase config is invalid.");
                     }
+                } catch (e) {
+                    console.error("Firebase Initialization Error:", e);
+                    setError(`Firebase kunde inte ansluta: ${e.message}`);
+                    setLoading(false);
                 }
-                // If we reach here, the config was not available or invalid.
-                throw new Error("Firebase config variable is not available.");
-            } catch (e) {
-                console.error("Firebase Initialization Error:", e);
-                setError(`Firebase kunde inte ansluta: ${e.message}`);
+            } else if (elapsedTime >= maxWaitTime) {
+                // If we've waited too long, stop and show an error
+                clearInterval(intervalId);
+                setError("Firebase kunde inte ansluta: Konfigurationen tog för lång tid att ladda.");
                 setLoading(false);
             }
-        }, 100);
+        }, pollInterval);
 
-        return () => clearTimeout(timer); // Cleanup timer on unmount
+        return () => clearInterval(intervalId); // Cleanup on component unmount
     }, []);
+
 
     // Effect for handling Authentication, runs when Firebase is ready.
     useEffect(() => {
