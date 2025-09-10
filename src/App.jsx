@@ -98,7 +98,7 @@ export default function App() {
 
     // Effect for Firebase Initialization, runs once on component mount.
     useEffect(() => {
-        const maxWaitTime = 5000; // 5 seconds timeout
+        const maxWaitTime = 10000; // 10 seconds timeout
         const pollInterval = 100; // check every 100ms
         let elapsedTime = 0;
 
@@ -126,7 +126,7 @@ export default function App() {
             } else if (elapsedTime >= maxWaitTime) {
                 // If we've waited too long, stop and show an error
                 clearInterval(intervalId);
-                setError("Firebase kunde inte ansluta: Konfigurationen tog för lång tid att ladda.");
+                setError("Anslutningen till databasen tog för lång tid. Prova att ladda om sidan.");
                 setLoading(false);
             }
         }, pollInterval);
@@ -768,4 +768,5 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         </div>
     );
 }
+
 
