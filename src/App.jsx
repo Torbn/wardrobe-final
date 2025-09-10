@@ -87,48 +87,6 @@ function SkeletonLoader() {
     );
 }
 
-// --- Komponent för anslutningsskärm ---
-function ConnectionGate({ onConnect }) {
-    const [configJson, setConfigJson] = useState('');
-    const [error, setError] = useState('');
-
-    const handleConnect = () => {
-        if (!configJson) {
-            setError("Fältet kan inte vara tomt.");
-            return;
-        }
-        onConnect(configJson, setError);
-    };
-
-    return (
-        <div className="flex items-center justify-center h-screen bg-gray-100 p-4">
-            <div className="bg-white p-8 rounded-lg shadow-xl max-w-lg w-full text-center">
-                <h1 className="text-2xl font-bold mb-4">Anslut till databasen</h1>
-                <p className="text-gray-600 mb-6">
-                    Klistra in din Firebase-konfiguration (hela JSON-objektet) nedan för att starta appen.
-                </p>
-                <textarea
-                    className="w-full h-48 p-3 border rounded mb-4 font-mono text-sm bg-gray-50 focus:ring-2 focus:ring-blue-500"
-                    placeholder='{ "apiKey": "...", "authDomain": "...", ... }'
-                    value={configJson}
-                    onChange={(e) => setConfigJson(e.target.value)}
-                />
-                <button
-                    onClick={handleConnect}
-                    className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
-                >
-                    Anslut
-                </button>
-                {(error) && <p className="text-red-500 text-sm mt-4">{error}</p>}
-                 <p className="text-xs text-gray-400 mt-4">
-                    Denna information sparas inte, du kan behöva klistra in den igen om du laddar om sidan.
-                </p>
-            </div>
-        </div>
-    );
-}
-
-
 // --- Huvudkomponent: App ---
 export default function App() {
     const [user, setUser] = useState(null);
@@ -138,38 +96,49 @@ export default function App() {
     const [firebaseReady, setFirebaseReady] = useState(false);
     
     useEffect(() => {
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+        const initFirebase = () => {
             try {
                 const firebaseConfig = JSON.parse(__firebase_config);
                 if (firebaseConfig && firebaseConfig.apiKey) {
-                    if (!app) { // Förhindra dubbel-initiering
+                    if (!app) {
                         app = initializeApp(firebaseConfig);
                         auth = getAuth(app);
                         db = getFirestore(app);
                     }
                     setFirebaseReady(true);
+                    return true;
                 }
+                throw new Error("Ogiltigt Firebase config-objekt");
             } catch (e) {
-                console.warn("Automatisk konfiguration misslyckades.");
+                console.error("Firebase Init Error:", e);
+                setError(`Kunde inte initiera databasen: ${e.message}`);
+                setLoading(false);
+                return false;
             }
-        }
-    }, []);
+        };
 
-    const handleManualConnect = (configJson, setConnectionError) => {
-        try {
-            const firebaseConfig = JSON.parse(configJson);
-            if (!firebaseConfig.apiKey) throw new Error("Konfigurationen är ogiltig, 'apiKey' saknas.");
-            if (!app) {
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-            }
-            setFirebaseReady(true);
-        } catch (e) {
-            console.error("Firebase Initialization Error:", e);
-            setConnectionError(`Anslutning misslyckades: ${e.message}`);
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            if(initFirebase()) return;
         }
-    };
+
+        let pollCount = 0;
+        const maxPolls = 40; // 40 * 200ms = 8 seconds
+        const poller = setInterval(() => {
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                clearInterval(poller);
+                initFirebase();
+            } else if (pollCount >= maxPolls) {
+                clearInterval(poller);
+                if(!firebaseReady) {
+                    setError("Kunde inte ansluta: Konfigurationen tog för lång tid att ladda. Prova att ladda om sidan.");
+                    setLoading(false);
+                }
+            }
+            pollCount++;
+        }, 200);
+
+        return () => clearInterval(poller);
+    }, []);
 
     useEffect(() => {
         if (!firebaseReady) return;
@@ -215,10 +184,10 @@ export default function App() {
         await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
     }
     
-    if (!firebaseReady) return <ConnectionGate onConnect={handleManualConnect} />;
-    if (loading) return <SkeletonLoader />;
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
     
+    if (!firebaseReady || loading) return <SkeletonLoader />;
+
     if (user && appData) {
         if (appData.mode === 'family' && !appData.familyId) {
              if (appData.status === 'pending') return <PendingApprovalScreen />;
@@ -294,10 +263,9 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
         setProcessingMessage(message);
         try {
             await actionPromise;
-            // Vid lyckad åtgärd kommer komponenten att bytas ut, så vi behöver inte sätta isProcessing till false här.
         } catch (e) {
             setError(e.message || 'Något gick fel. Försök igen.');
-            setIsProcessing(false); // Stäng laddningsvyn endast vid fel
+            setIsProcessing(false);
         }
     };
 
@@ -520,6 +488,7 @@ function WardrobeView({ owner }) {
     const [garments, setGarments] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [garmentToDelete, setGarmentToDelete] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
@@ -540,8 +509,20 @@ function WardrobeView({ owner }) {
             setGarmentToDelete(null);
         }
     };
+    
+    const filteredGarments = useMemo(() => {
+        if (!searchTerm) {
+            return garments;
+        }
+        return garments.filter(g =>
+            g.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            g.category?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            g.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            g.notes?.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+    }, [garments, searchTerm]);
      
-    const groupedGarments = garments.reduce((acc, garment) => {
+    const groupedGarments = filteredGarments.reduce((acc, garment) => {
         const category = garment.category || 'Övrigt';
         if (!acc[category]) acc[category] = [];
         acc[category].push(garment);
@@ -556,15 +537,29 @@ function WardrobeView({ owner }) {
             <Modal isOpen={!!garmentToDelete} onClose={() => setGarmentToDelete(null)} onConfirm={confirmDelete} title="Ta bort plagg"><p>Är du säker på att du vill ta bort plagget "{garmentToDelete?.name}"?</p></Modal>
             {showAddForm ? <AddGarmentForm onAdd={addGarment} onCancel={() => setShowAddForm(false)} /> : (
                 <>
+                    <div className="mb-6">
+                        <input
+                            type="search"
+                            placeholder="Sök i garderoben..."
+                            className="w-full p-3 border-gray-300 border rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                        />
+                    </div>
                     {garments.length > 0 ? (
-                        sortedCategories.map(category => (
-                            <div key={category} className="mb-8">
-                                <h2 className="text-2xl font-bold border-b pb-2 mb-4">{category}</h2>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                    {groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}
+                        filteredGarments.length > 0 ? (
+                            sortedCategories.map(category => (
+                                groupedGarments[category] &&
+                                <div key={category} className="mb-8">
+                                    <h2 className="text-2xl font-bold border-b pb-2 mb-4">{category}</h2>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                                        {groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}
+                                    </div>
                                 </div>
-                            </div>
-                        ))
+                            ))
+                        ) : (
+                            <p className="text-center text-gray-500 mt-8">Inga plagg matchade din sökning.</p>
+                        )
                     ) : (
                         <p className="text-center text-gray-500 mt-8">Inga plagg än. Klicka på plus-knappen för att lägga till!</p>
                     )}
@@ -744,15 +739,13 @@ function AddGarmentForm({ onAdd, onCancel }) {
                 imageUrl = await resizeImage(imageFile);
             }
             await onAdd({ name, category, size, location, notes, imageUrl });
-            // onCancel() anropas inte här, eftersom onAdd() i föräldern kommer att dölja formuläret
         } catch (err) {
              if (err.message.includes('longer than 1048487 bytes')) {
                 setError('Bilden är för stor även efter komprimering. Välj en mindre bild.');
              } else {
                 setError('Ett fel uppstod vid uppladdning.');
              }
-        } finally {
-            setIsUploading(false);
+             setIsUploading(false);
         }
     };
 
@@ -828,8 +821,7 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
              } else {
                 setError('Ett fel uppstod vid uppladdning.');
              }
-        } finally {
-            setIsUploading(false);
+             setIsUploading(false);
         }
     };
 
