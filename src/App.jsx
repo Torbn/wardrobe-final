@@ -89,6 +89,48 @@ function SkeletonLoader() {
     );
 }
 
+// --- Komponent för anslutningsskärm ---
+function ConnectionGate({ onConnect }) {
+    const [configJson, setConfigJson] = useState('');
+    const [error, setError] = useState('');
+
+    const handleConnect = () => {
+        if (!configJson) {
+            setError("Fältet kan inte vara tomt.");
+            return;
+        }
+        onConnect(configJson, setError);
+    };
+
+    return (
+        <div className="flex items-center justify-center h-screen bg-gray-100 p-4">
+            <div className="bg-white p-8 rounded-lg shadow-xl max-w-lg w-full text-center">
+                <h1 className="text-2xl font-bold mb-4">Anslut till databasen</h1>
+                <p className="text-gray-600 mb-6">
+                    Klistra in din Firebase-konfiguration (hela JSON-objektet) nedan för att starta appen.
+                </p>
+                <textarea
+                    className="w-full h-48 p-3 border rounded mb-4 font-mono text-sm bg-gray-50 focus:ring-2 focus:ring-blue-500"
+                    placeholder='{ "apiKey": "...", "authDomain": "...", ... }'
+                    value={configJson}
+                    onChange={(e) => setConfigJson(e.target.value)}
+                />
+                <button
+                    onClick={handleConnect}
+                    className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                >
+                    Anslut
+                </button>
+                {(error) && <p className="text-red-500 text-sm mt-4">{error}</p>}
+                 <p className="text-xs text-gray-400 mt-4">
+                    Denna information sparas inte, du kan behöva klistra in den igen om du laddar om sidan.
+                </p>
+            </div>
+        </div>
+    );
+}
+
+
 // --- Huvudkomponent: App ---
 export default function App() {
     const [user, setUser] = useState(null);
@@ -105,7 +147,7 @@ export default function App() {
             setJoinFamilyIdFromUrl(familyId);
         }
 
-        const initFirebase = () => {
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
             try {
                 const firebaseConfig = JSON.parse(__firebase_config);
                 if (firebaseConfig && firebaseConfig.apiKey) {
@@ -115,36 +157,28 @@ export default function App() {
                         db = getFirestore(app);
                     }
                     setFirebaseReady(true);
-                    return true;
                 }
-                throw new Error("Ogiltigt Firebase config-objekt");
             } catch (e) {
-                // Detta är ok om __firebase_config inte är redo än
-                return false;
+                console.warn("Automatisk konfiguration misslyckades. Faller tillbaka till manuell inmatning.");
             }
-        };
-
-        if (initFirebase()) {
-            return; // Allt klart
         }
-
-        let pollCount = 0;
-        const maxPolls = 50; // 50 * 200ms = 10 seconds
-        const poller = setInterval(() => {
-            if (initFirebase()) {
-                clearInterval(poller);
-            } else if (pollCount >= maxPolls) {
-                clearInterval(poller);
-                if(!firebaseReady) {
-                    setError("Kunde inte ansluta: Konfigurationen tog för lång tid att ladda. Prova att ladda om sidan.");
-                    setLoading(false);
-                }
-            }
-            pollCount++;
-        }, 200);
-
-        return () => clearInterval(poller);
     }, []);
+
+    const handleManualConnect = (configJson, setConnectionError) => {
+        try {
+            const firebaseConfig = JSON.parse(configJson);
+            if (!firebaseConfig.apiKey) throw new Error("Konfigurationen är ogiltig, 'apiKey' saknas.");
+            if (!app) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            }
+            setFirebaseReady(true);
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+            setConnectionError(`Anslutning misslyckades: ${e.message}`);
+        }
+    };
 
     useEffect(() => {
         if (!firebaseReady) return;
@@ -199,7 +233,8 @@ export default function App() {
     }
     
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-    if (!firebaseReady || loading) return <SkeletonLoader />;
+    if (!firebaseReady) return <ConnectionGate onConnect={handleManualConnect} />;
+    if (loading) return <SkeletonLoader />;
     
     if (user && appData) {
         if (appData.mode === 'family' && !appData.familyId) {
