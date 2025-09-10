@@ -14,6 +14,8 @@ const SettingsIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-
 const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>;
 const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
+const ChevronDownIcon = ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>;
+
 
 // --- Firebase Konfiguration ---
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -136,9 +138,15 @@ export default function App() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [firebaseReady, setFirebaseReady] = useState(false);
+    const [joinFamilyIdFromUrl, setJoinFamilyIdFromUrl] = useState(null);
     
     useEffect(() => {
-        // Försök att auto-ansluta om konfigurationen redan finns (t.ex. i förhandsgranskning)
+        const params = new URLSearchParams(window.location.search);
+        const familyId = params.get('joinFamily');
+        if (familyId) {
+            setJoinFamilyIdFromUrl(familyId);
+        }
+
         if (typeof __firebase_config !== 'undefined' && __firebase_config) {
             try {
                 const firebaseConfig = JSON.parse(__firebase_config);
@@ -151,7 +159,7 @@ export default function App() {
                     setFirebaseReady(true);
                 }
             } catch (e) {
-                console.warn("Automatisk konfiguration misslyckades. Faller tillbaka till manuell inmatning.");
+                console.warn("Automatisk konfiguration misslyckades.");
             }
         }
     }, []);
@@ -210,8 +218,15 @@ export default function App() {
 
     const handleJoinRequest = async (name, familyId) => {
         if (!user) throw new Error("Användare inte inloggad.");
+        if (!db) throw new Error("Databasen är inte ansluten.");
+        
         const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
-        if (!(await getDoc(familyDocRef)).exists()) throw new Error("Familjen finns inte.");
+        const familyDoc = await getDoc(familyDocRef);
+        
+        if (!familyDoc.exists()) {
+             throw new Error("Familjekoden är ogiltig.");
+        }
+        
         const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
         await setDoc(joinRequestRef, { familyId, requesterId: user.uid, requesterName: name, status: 'pending' });
         await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
@@ -230,7 +245,7 @@ export default function App() {
         return <WardrobeManager user={user} appData={appData} />;
     }
     
-    if (user && !appData) return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} />;
+    if (user && !appData) return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
 
     return <SkeletonLoader />;
 }
@@ -282,13 +297,20 @@ function FamilySetup({ user, appData }) {
 }
 
 // --- Komponent: Profil-setup ---
-function ProfileSetup({ onSetup, onJoinRequest }) {
+function ProfileSetup({ onSetup, onJoinRequest, joinFamilyIdFromUrl }) {
     const [name, setName] = useState('');
     const [joinFamilyId, setJoinFamilyId] = useState('');
     const [view, setView] = useState('main');
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
     const [processingMessage, setProcessingMessage] = useState('');
+
+    useEffect(() => {
+        if (joinFamilyIdFromUrl) {
+            setJoinFamilyId(joinFamilyIdFromUrl);
+            setView('join');
+        }
+    }, [joinFamilyIdFromUrl]);
 
     const handleAction = async (actionPromise, message) => {
         setIsProcessing(true);
@@ -437,6 +459,26 @@ function SettingsView({ user, appData, members = [] }) {
             return unsubscribe;
         }
     }, [role, appData.familyId]);
+    
+    const handleShareInvite = async () => {
+        const inviteLink = `${window.location.origin}${window.location.pathname}?joinFamily=${appData.familyId}`;
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: 'Inbjudan till familjegarderob',
+                    text: `Gå med i ${appData.name}s familjegarderob!`,
+                    url: inviteLink,
+                });
+            } catch (error) {
+                console.error('Error sharing:', error);
+            }
+        } else {
+            // Fallback for browsers that don't support Web Share API
+            navigator.clipboard.writeText(inviteLink);
+            alert("Inbjudningslänk kopierad till urklipp!");
+        }
+    };
+
 
     const handlePrivacyToggle = async (e) => {
         if (!currentUserData?.docId) return;
@@ -492,8 +534,11 @@ function SettingsView({ user, appData, members = [] }) {
                         </div>
                         <div>
                             <h3 className="font-semibold mb-2">Bjud in nya medlemmar</h3>
-                            <p className="text-sm text-gray-600">Dela familjekoden nedan.</p>
-                            <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId}</p>
+                            <p className="text-sm text-gray-600 mb-2">Dela familjekoden nedan eller skicka en inbjudningslänk.</p>
+                            <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId.substring(0, 6).toUpperCase()}</p>
+                            <button onClick={handleShareInvite} className="w-full mt-2 bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600">
+                                Bjud in med länk
+                            </button>
                         </div>
                     </div>
                 )}
@@ -533,8 +578,11 @@ function WardrobeView({ owner }) {
     }, [garmentsPath, owner]);
 
     const addGarment = async (garmentData) => {
-        await addDoc(collection(db, garmentsPath), { ...garmentData, createdAt: serverTimestamp() });
-        setShowAddForm(false);
+        try {
+            await addDoc(collection(db, garmentsPath), { ...garmentData, createdAt: serverTimestamp() });
+        } finally {
+            setShowAddForm(false);
+        }
     };
 
     const confirmDelete = async () => {
@@ -604,9 +652,9 @@ function WardrobeView({ owner }) {
                                 groupedGarments[category] &&
                                 <div key={category} className="mb-2">
                                     <button onClick={() => toggleCategory(category)} className="w-full text-left bg-gray-50 hover:bg-gray-100 p-3 rounded-t-lg border-b">
-                                        <h2 className="text-xl font-bold flex justify-between items-center">
-                                            {category} ({groupedGarments[category].length})
-                                            <span className={`transform transition-transform ${expandedCategories[category] ? 'rotate-180' : ''}`}>▼</span>
+                                        <h2 className="text-xl flex justify-between items-center w-full">
+                                            <span>{category} ({groupedGarments[category].length})</span>
+                                            <ChevronDownIcon className={`h-5 w-5 text-gray-400 transform transition-transform ${expandedCategories[category] ? 'rotate-180' : ''}`} />
                                         </h2>
                                     </button>
                                     {expandedCategories[category] && (
@@ -667,8 +715,11 @@ function OutfitsView({ owner }) {
     }, [garmentsPath, outfitsPath, owner]);
 
     const addOutfit = async (outfitData) => {
-        await addDoc(collection(db, outfitsPath), { ...outfitData, createdAt: serverTimestamp() });
-        setShowAddForm(false);
+        try {
+            await addDoc(collection(db, outfitsPath), { ...outfitData, createdAt: serverTimestamp() });
+        } finally {
+            setShowAddForm(false);
+        }
     };
 
     const confirmDelete = async () => {
