@@ -88,9 +88,9 @@ function SkeletonLoader() {
 }
 
 // --- Komponent för anslutningsskärm ---
-function ConnectionGate({ onConnect, initialError }) {
+function ConnectionGate({ onConnect }) {
     const [configJson, setConfigJson] = useState('');
-    const [error, setError] = useState(initialError);
+    const [error, setError] = useState('');
 
     const handleConnect = () => {
         if (!configJson) {
@@ -137,31 +137,28 @@ export default function App() {
     const [error, setError] = useState('');
     const [firebaseReady, setFirebaseReady] = useState(false);
     
-    // Försök att auto-ansluta en gång
     useEffect(() => {
         if (typeof __firebase_config !== 'undefined' && __firebase_config) {
             try {
                 const firebaseConfig = JSON.parse(__firebase_config);
                 if (firebaseConfig && firebaseConfig.apiKey) {
-                    app = initializeApp(firebaseConfig);
-                    auth = getAuth(app);
-                    db = getFirestore(app);
+                    if (!app) { // Förhindra dubbel-initiering
+                        app = initializeApp(firebaseConfig);
+                        auth = getAuth(app);
+                        db = getFirestore(app);
+                    }
                     setFirebaseReady(true);
                 }
             } catch (e) {
-                console.warn("Automatisk konfiguration misslyckades. Faller tillbaka till manuell inmatning.");
+                console.warn("Automatisk konfiguration misslyckades.");
             }
         }
     }, []);
 
-
     const handleManualConnect = (configJson, setConnectionError) => {
         try {
             const firebaseConfig = JSON.parse(configJson);
-            if (!firebaseConfig.apiKey) {
-                throw new Error("Konfigurationen är ogiltig, 'apiKey' saknas.");
-            }
-            // Förhindra att Firebase initieras flera gånger
+            if (!firebaseConfig.apiKey) throw new Error("Konfigurationen är ogiltig, 'apiKey' saknas.");
             if (!app) {
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
@@ -174,8 +171,6 @@ export default function App() {
         }
     };
 
-
-    // Effect for handling Authentication, runs when Firebase is ready.
     useEffect(() => {
         if (!firebaseReady) return;
 
@@ -206,63 +201,66 @@ export default function App() {
     }, [firebaseReady]);
 
     const handleProfileSetup = async (name, mode) => {
-        if (!user) return; 
-        setError('');
-        try {
-            const userProfile = { name, mode, familyId: null };
-            if (mode === 'family') {
-                const familyId = doc(collection(db, '_')).id;
-                userProfile.familyId = familyId;
-                const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
-                await setDoc(familyDocRef, {
-                    owner: user.uid, name: `${name}s familj`, createdAt: serverTimestamp(),
-                });
-                const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
-                await setDoc(membershipDocRef, {
-                    userId: user.uid, familyId, name, role: 'admin', isPrivate: false,
-                });
-            }
-            await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), userProfile);
-        } catch (e) { 
-            console.error("Profile setup error: ", e); 
-            setError("Kunde inte skapa profilen."); 
-            throw e; // Kasta om felet så att anropande funktion vet att det misslyckades
-        }
+        if (!user) throw new Error("Användare inte inloggad.");
+        const userProfile = { name, mode, familyId: null };
+        await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), userProfile);
     };
 
     const handleJoinRequest = async (name, familyId) => {
-        if (!user || !name || !familyId) return; 
-        setError('');
-        try {
-            const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
-            if (!(await getDoc(familyDocRef)).exists()) throw new Error("Familjen finns inte.");
-             
-            const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
-            await setDoc(joinRequestRef, {
-                familyId, requesterId: user.uid, requesterName: name, status: 'pending',
-            });
-            await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), {
-                name, mode: 'family', status: 'pending', requestedFamilyId: familyId
-            });
-        } catch(e) { 
-            console.error("Join request error:", e); 
-            setError(e.message || "Kunde inte skicka förfrågan."); 
-            throw e; // Kasta om felet
-        }
+        if (!user) throw new Error("Användare inte inloggad.");
+        const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
+        if (!(await getDoc(familyDocRef)).exists()) throw new Error("Familjen finns inte.");
+        const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
+        await setDoc(joinRequestRef, { familyId, requesterId: user.uid, requesterName: name, status: 'pending' });
+        await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
     }
     
-    if (!firebaseReady) {
-        return <ConnectionGate onConnect={handleManualConnect} />;
-    }
-
+    if (!firebaseReady) return <ConnectionGate onConnect={handleManualConnect} />;
     if (loading) return <SkeletonLoader />;
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-     
-    if (user && appData?.status === 'pending') return <PendingApprovalScreen />;
+    
+    if (user && appData) {
+        if (appData.mode === 'family' && !appData.familyId) {
+             if (appData.status === 'pending') return <PendingApprovalScreen />;
+             return <FamilySetup user={user} appData={appData} />;
+        }
+        if (appData.status === 'pending') return <PendingApprovalScreen />;
+        return <WardrobeManager user={user} appData={appData} />;
+    }
+    
+    if (user && !appData) return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} />;
+
+    return <SkeletonLoader />;
+}
+
+// --- Komponent: Slutför skapande av familj ---
+function FamilySetup({ user, appData }) {
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        const createFamily = async () => {
+            if (!user || !appData.name) return;
+            try {
+                const familyId = doc(collection(db, '_')).id;
+                const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
+                await setDoc(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
+                const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
+                await setDoc(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
+                const userProfileRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
+                await updateDoc(userProfileRef, { familyId: familyId });
+            } catch (e) {
+                console.error("Family creation error:", e);
+                setError("Kunde inte skapa familjen. Prova att ladda om sidan.");
+            }
+        };
+        createFamily();
+    }, [user, appData]);
+
+    if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
 
     return (
-        <div className="h-screen w-screen bg-gray-100 antialiased">
-            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <SkeletonLoader />}
+        <div className="fixed inset-0 bg-white z-50 flex justify-center items-center">
+            <div className="text-xl font-semibold animate-pulse">Slutför konfiguration av familj...</div>
         </div>
     );
 }
@@ -274,49 +272,16 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
     const [view, setView] = useState('main');
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
+    const [processingMessage, setProcessingMessage] = useState('');
 
-    const handleJoin = async () => {
-        if (!name || !joinFamilyId || isProcessing) return;
+    const handleAction = async (actionPromise, message) => {
         setIsProcessing(true);
         setError('');
-        
-        const joinPromise = onJoinRequest(name, joinFamilyId);
-        const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error("Timeout")), 20000) // 20 sekunders timeout
-        );
-
+        setProcessingMessage(message);
         try {
-            await Promise.race([joinPromise, timeoutPromise]);
+            await actionPromise;
         } catch (e) {
-            if (e.message === "Timeout") {
-                setError('Förfrågan tog för lång tid. Kontrollera din anslutning och försök igen.');
-            } else {
-                setError(e.message || 'Kunde inte skicka förfrågan.');
-            }
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const handleSetup = async (mode) => {
-        if (!name || isProcessing) return;
-        setIsProcessing(true);
-        setError('');
-
-        const setupPromise = onSetup(name, mode);
-        const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error("Timeout")), 20000) // 20 sekunders timeout
-        );
-
-        try {
-            await Promise.race([setupPromise, timeoutPromise]);
-        } catch (e) {
-            if (e.message === "Timeout") {
-                setError('Konfigureringen tog för lång tid. Kontrollera din anslutning och försök igen.');
-            } else {
-                setError('Kunde inte skapa profilen.');
-            }
-        } finally {
+            setError(e.message || 'Något gick fel. Försök igen.');
             setIsProcessing(false);
         }
     };
@@ -324,14 +289,14 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
     if (view === 'join') {
         return (
             <>
-                {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">Skickar förfrågan...</div></div>}
+                {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">{processingMessage}</div></div>}
                 <div className="flex items-center justify-center h-screen">
                     <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
                         <h2 className="text-2xl font-bold mb-4">Gå med i familj</h2>
                         {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
                         <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ditt namn" className="w-full p-2 border rounded mb-4" />
                         <input type="text" value={joinFamilyId} onChange={e => setJoinFamilyId(e.target.value)} placeholder="Familjekod" className="w-full p-2 border rounded mb-4" />
-                        <button onClick={handleJoin} disabled={isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                        <button onClick={() => handleAction(onJoinRequest(name, joinFamilyId), 'Skickar förfrågan...')} disabled={!name || !joinFamilyId || isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
                             Skicka förfrågan
                         </button>
                         <button onClick={() => setView('main')} className="mt-4 text-sm text-gray-600">Tillbaka</button>
@@ -343,7 +308,7 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
 
     return (
         <>
-            {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">Konfigurerar din garderob...</div></div>}
+            {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">{processingMessage}</div></div>}
             <div className="flex items-center justify-center h-screen">
                 <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
                     <h1 className="text-3xl font-bold mb-2">Välkommen!</h1>
@@ -351,10 +316,10 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
                     {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
                     <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ange ditt namn" className="w-full p-3 border rounded-lg mb-4 text-center" />
                     <div className="space-y-3">
-                        <button onClick={() => handleSetup('personal')} disabled={!name || isProcessing} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-400">
+                        <button onClick={() => handleAction(onSetup(name, 'personal'), 'Konfigurerar din garderob...')} disabled={!name || isProcessing} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-400">
                             Bara för mig
                         </button>
-                        <button onClick={() => handleSetup('family')} disabled={!name || isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                        <button onClick={() => handleAction(onSetup(name, 'family'), 'Konfigurerar din garderob...')} disabled={!name || isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
                             Skapa en familj
                         </button>
                         <button onClick={() => setView('join')} disabled={isProcessing} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
