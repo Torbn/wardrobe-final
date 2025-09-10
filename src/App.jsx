@@ -111,7 +111,8 @@ function SkeletonLoader() {
 export default function App() {
     const [user, setUser] = useState(null);
     const [appData, setAppData] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const [authLoading, setAuthLoading] = useState(true);
+    const [dataLoading, setDataLoading] = useState(true);
     const [error, setError] = useState('');
     const [firebaseReady, setFirebaseReady] = useState(false);
     const [joinFamilyIdFromUrl, setJoinFamilyIdFromUrl] = useState(null);
@@ -119,9 +120,7 @@ export default function App() {
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const familyId = params.get('joinFamily');
-        if (familyId) {
-            setJoinFamilyIdFromUrl(familyId);
-        }
+        if (familyId) setJoinFamilyIdFromUrl(familyId);
 
         try {
             if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "AIzaSy...") {
@@ -133,32 +132,26 @@ export default function App() {
                 setFirebaseReady(true);
             } else {
                  setError("Firebase-konfigurationen saknas. Vänligen klistra in den i App.jsx.");
-                 setLoading(false);
+                 setAuthLoading(false);
             }
         } catch (e) {
-            console.error("Firebase Init Error:", e);
             setError(`Kunde inte initiera databasen: ${e.message}`);
-            setLoading(false);
+            setAuthLoading(false);
         }
     }, []);
 
-
     useEffect(() => {
         if (!firebaseReady) return;
-
-        setLoading(true);
+        
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
                 const unsubscribeSnapshot = onSnapshot(userDocRef, (userDocSnap) => {
                     setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
-                    setLoading(false);
-                }, (err) => {
-                    console.error("Snapshot error:", err);
-                    setError("Kunde inte hämta profildata.");
-                    setLoading(false);
-                });
+                    setDataLoading(false);
+                }, () => { setError("Kunde inte hämta profildata."); setDataLoading(false); });
+                setAuthLoading(false);
                 return () => unsubscribeSnapshot();
             } else {
                  try {
@@ -167,7 +160,7 @@ export default function App() {
                     } else {
                         await signInAnonymously(auth);
                     }
-                } catch (err) { setError("Autentisering misslyckades."); setLoading(false); }
+                 } catch (err) { setError("Autentisering misslyckades."); setAuthLoading(false); }
             }
         });
         return () => unsubscribe();
@@ -180,89 +173,71 @@ export default function App() {
     };
 
     const handleJoinRequest = async (name, familyId) => {
-        if (!user) throw new Error("Användare inte inloggad.");
-        if (!db) throw new Error("Databasen är inte ansluten.");
-        
+        if (!user || !db) throw new Error("Användare eller databas är inte redo.");
         try {
             const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
             const familyDoc = await getDoc(familyDocRef);
-            
-            if (!familyDoc.exists()) {
-                 throw new Error("Familjekoden är ogiltig.");
-            }
+            if (!familyDoc.exists()) throw new Error("Familjekoden är ogiltig.");
             
             const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
             await setDoc(joinRequestRef, { familyId, requesterId: user.uid, requesterName: name, status: 'pending' });
             await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
         } catch (e) {
-            if (e.code === 'unavailable') {
-                throw new Error("Kunde inte ansluta till databasen. Kontrollera din internetanslutning och försök igen.");
+            if (e.code === 'unavailable' || e.message.includes('offline')) {
+                throw new Error("Kunde inte ansluta. Kontrollera din internetanslutning.");
             }
             throw e;
         }
     }
     
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-    if (!firebaseReady || loading) return <SkeletonLoader />;
     
-    if (user && appData) {
-        if (appData.mode === 'family' && !appData.familyId) {
-             if (appData.status === 'pending') return <PendingApprovalScreen />;
-             return <FamilySetup user={user} appData={appData} />;
-        }
-        if (appData.status === 'pending') return <PendingApprovalScreen />;
-        return <WardrobeManager user={user} appData={appData} />;
-    }
-    
-    if (user && !appData) return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
+    // Visa välkomstskärmen/logik direkt när auth är klar, innan all data laddats.
+    if (authLoading) return <SkeletonLoader />;
 
-    return <SkeletonLoader />;
+    const renderContent = () => {
+        if (dataLoading) return <SkeletonLoader />;
+        if (user && appData) {
+            if (appData.mode === 'family' && !appData.familyId) {
+                 if (appData.status === 'pending') return <PendingApprovalScreen />;
+                 return <FamilySetup user={user} appData={appData} />;
+            }
+            if (appData.status === 'pending') return <PendingApprovalScreen />;
+            return <WardrobeManager user={user} appData={appData} />;
+        }
+        if (user && !appData) {
+            return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
+        }
+        return <SkeletonLoader />;
+    };
+
+    return <div className="h-screen w-screen bg-gray-100 antialiased">{renderContent()}</div>
 }
 
 // --- Komponent: Slutför skapande av familj ---
 function FamilySetup({ user, appData }) {
     const [error, setError] = useState('');
-
     useEffect(() => {
         const createFamilyWithBatch = async () => {
             if (!user || !appData.name) return;
-
             const batch = writeBatch(db);
             const familyId = doc(collection(db, '_')).id;
-            
             const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
             const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
             const userProfileRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
-
             batch.set(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
             batch.set(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
             batch.update(userProfileRef, { familyId: familyId });
-
             await batch.commit();
         };
-
-        const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Timeout")), 20000)
-        );
-
-        Promise.race([createFamilyWithBatch(), timeoutPromise])
-            .catch(e => {
-                console.error("Family creation failed:", e);
-                if (e.message === "Timeout") {
-                    setError("Konfigureringen tog för lång tid. Ladda om sidan och försök igen.");
-                } else {
-                    setError("Kunde inte skapa familjen. Prova att ladda om sidan.");
-                }
-            });
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 20000));
+        Promise.race([createFamilyWithBatch(), timeoutPromise]).catch(e => {
+            if (e.message === "Timeout") setError("Konfigureringen tog för lång tid.");
+            else setError("Kunde inte skapa familjen.");
+        });
     }, [user, appData]);
-
-    if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
-
-    return (
-        <div className="fixed inset-0 bg-white z-50 flex justify-center items-center">
-            <div className="text-xl font-semibold animate-pulse">Slutför konfiguration av familj...</div>
-        </div>
-    );
+    if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><p>{error}</p></div>;
+    return <div className="fixed inset-0 bg-white z-50 flex justify-center items-center"><p>Slutför konfiguration av familj...</p></div>;
 }
 
 // --- Komponent: Profil-setup ---
@@ -424,18 +399,18 @@ function WardrobeManager({ user, appData }) {
             const membershipsQuery = query(collection(db, `/artifacts/${appId}/public/data/memberships`), where("familyId", "==", appData.familyId));
             const unsubscribe = onSnapshot(membershipsQuery, (snapshot) => {
                 const membersList = snapshot.docs.map(doc => ({
-                    id: doc.data().userId, docId: doc.id, ...doc.data(), type: 'full'
+                    id: doc.data().userId, docId: doc.id, ...doc.data()
                 }));
                 setFamilyMembers(membersList);
             });
             return unsubscribe;
         } else {
-             setFamilyMembers([{ id: user.uid, name: appData.name, type: 'full' }]);
+             setFamilyMembers([{ id: user.uid, name: appData.name }]);
         }
     }, [appData.familyId, appData.mode, user.uid, appData.name]);
      
     const visibleMembers = useMemo(() => {
-        if (appData.mode !== 'family') return [{ id: user.uid, name: appData.name, type: 'full' }];
+        if (appData.mode !== 'family') return [{ id: user.uid, name: appData.name }];
         return familyMembers.filter(m => m.id === user.uid || !m.isPrivate);
     }, [familyMembers, user.uid, appData]);
      
@@ -460,7 +435,7 @@ function WardrobeManager({ user, appData }) {
                 <h1 className="text-xl font-bold text-center sm:text-left">{currentWardrobeOwner.name}'s Garderob</h1>
                 {appData.mode === 'family' && (
                     <div className="flex items-center gap-4">
-                        <select value={currentWardrobeOwner.id} onChange={e => { const selected = visibleMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
+                        <select value={currentWardrobeOwner.id} onChange={e => { const selected = familyMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
                            {visibleMembers.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
                         </select>
                     </div>
@@ -484,6 +459,7 @@ function SettingsView({ user, appData, members = [] }) {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [joinRequests, setJoinRequests] = useState([]);
     const [newMemberName, setNewMemberName] = useState('');
+    const [isAddingMember, setIsAddingMember] = useState(false);
     const currentUserData = members.find(m => m.id === user.uid);
     const role = currentUserData?.role;
 
@@ -518,28 +494,26 @@ function SettingsView({ user, appData, members = [] }) {
     
     const handleAddVirtualMember = async () => {
         if (!newMemberName.trim() || !appData.familyId) return;
-
+        setIsAddingMember(true);
         try {
             const virtualMemberId = doc(collection(db, '_')).id;
-            const userDocRef = doc(db, `/artifacts/${appId}/users/${virtualMemberId}`);
-            const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`), virtualMemberId);
+            const membershipDocRef = doc(db, `/artifacts/${appId}/public/data/memberships/${virtualMemberId}`);
             
-            const batch = writeBatch(db);
-
-            batch.set(userDocRef, { name: newMemberName, mode: 'family', familyId: appData.familyId, isVirtual: true });
-            batch.set(membershipDocRef, {
+            await setDoc(membershipDocRef, {
                 userId: virtualMemberId,
                 familyId: appData.familyId,
                 name: newMemberName,
                 role: 'virtual',
                 isPrivate: false,
+                isVirtual: true,
             });
 
-            await batch.commit();
             setNewMemberName('');
         } catch (e) {
             console.error("Error adding virtual member:", e);
             alert("Kunde inte lägga till medlemmen.");
+        } finally {
+            setIsAddingMember(false);
         }
     };
 
@@ -569,7 +543,6 @@ function SettingsView({ user, appData, members = [] }) {
     const handleDeleteProfile = async () => {
         const profileDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
         await deleteDoc(profileDocRef);
-        // Ytterligare logik för att radera medlemskap etc. kan läggas till här
         setShowDeleteModal(false);
     };
 
@@ -617,10 +590,10 @@ function SettingsView({ user, appData, members = [] }) {
                                 />
                                 <button 
                                     onClick={handleAddVirtualMember}
-                                    disabled={!newMemberName.trim()}
+                                    disabled={!newMemberName.trim() || isAddingMember}
                                     className="bg-green-500 text-white px-4 py-2 text-sm rounded disabled:bg-gray-300"
                                 >
-                                    Lägg till
+                                    {isAddingMember ? 'Lägger till...' : 'Lägg till'}
                                 </button>
                             </div>
                         </div>
@@ -652,7 +625,9 @@ function WardrobeView({ owner }) {
     const [garmentToDelete, setGarmentToDelete] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [expandedCategories, setExpandedCategories] = useState({});
-    const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
+    const garmentsPath = owner.isVirtual 
+        ? `/artifacts/${appId}/public/data/memberships/${owner.id}/garments` 
+        : `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
         if (!owner || !db) return;
@@ -673,9 +648,7 @@ function WardrobeView({ owner }) {
     };
     
     const filteredGarments = useMemo(() => {
-        if (!searchTerm) {
-            return garments;
-        }
+        if (!searchTerm) return garments;
         return garments.filter(g =>
             g.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
             g.category?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -691,67 +664,21 @@ function WardrobeView({ owner }) {
         return acc;
     }, {});
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
     const sortedCategories = categories.filter(cat => groupedGarments[cat]).concat(Object.keys(groupedGarments).filter(cat => !categories.includes(cat)));
     
-    const toggleCategory = (category) => {
-        setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
-    };
-
-    const expandAll = () => {
-        const allExpanded = sortedCategories.reduce((acc, cat) => ({...acc, [cat]: true}), {});
-        setExpandedCategories(allExpanded);
-    };
-    
-    const collapseAll = () => {
-        setExpandedCategories({});
-    };
+    const toggleCategory = (category) => setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
+    const expandAll = () => setExpandedCategories(sortedCategories.reduce((acc, cat) => ({...acc, [cat]: true}), {}));
+    const collapseAll = () => setExpandedCategories({});
 
     return (
         <div>
             <Modal isOpen={!!garmentToDelete} onClose={() => setGarmentToDelete(null)} onConfirm={confirmDelete} title="Ta bort plagg"><p>Är du säker på att du vill ta bort plagget "{garmentToDelete?.name}"?</p></Modal>
             {showAddForm ? <AddGarmentForm onAdd={addGarment} onCancel={() => setShowAddForm(false)} /> : (
                 <>
-                    <div className="mb-4">
-                        <input
-                            type="search"
-                            placeholder="Sök i garderoben..."
-                            className="w-full p-3 border-gray-300 border rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                            value={searchTerm}
-                            onChange={e => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-                    <div className="flex gap-2 mb-6">
-                        <button onClick={expandAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Expandera alla</button>
-                        <button onClick={collapseAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Kollapsa alla</button>
-                    </div>
-
-                    {garments.length > 0 ? (
-                        filteredGarments.length > 0 ? (
-                            sortedCategories.map(category => (
-                                groupedGarments[category] &&
-                                <div key={category} className="mb-2">
-                                    <button onClick={() => toggleCategory(category)} className="w-full text-left bg-gray-50 hover:bg-gray-100 p-3 rounded-t-lg border-b">
-                                        <h2 className="text-xl font-normal flex justify-between items-center w-full">
-                                            <span>{category} ({groupedGarments[category].length})</span>
-                                            <ChevronDownIcon className={`h-5 w-5 text-gray-400 transform transition-transform ${expandedCategories[category] ? 'rotate-180' : ''}`} />
-                                        </h2>
-                                    </button>
-                                    {expandedCategories[category] && (
-                                        <div className="p-4 bg-white rounded-b-lg shadow-inner">
-                                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                                {groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            ))
-                        ) : (
-                            <p className="text-center text-gray-500 mt-8">Inga plagg matchade din sökning.</p>
-                        )
-                    ) : (
-                        <p className="text-center text-gray-500 mt-8">Inga plagg än. Klicka på plus-knappen för att lägga till!</p>
-                    )}
+                    <div className="mb-4"><input type="search" placeholder="Sök i garderoben..." className="w-full p-3 border-gray-300 border rounded-lg shadow-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+                    <div className="flex gap-2 mb-6"><button onClick={expandAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Expandera alla</button><button onClick={collapseAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Kollapsa alla</button></div>
+                    {garments.length > 0 ? (filteredGarments.length > 0 ? (sortedCategories.map(category => (groupedGarments[category] && <div key={category} className="mb-2"><button onClick={() => toggleCategory(category)} className="w-full text-left bg-gray-50 hover:bg-gray-100 p-3 rounded-t-lg border-b"><h2 className="text-xl font-normal flex justify-between items-center w-full"><span>{category} ({groupedGarments[category].length})</span><ChevronDownIcon className={`h-5 w-5 text-gray-400 transform transition-transform ${expandedCategories[category] ? 'rotate-180' : ''}`} /></h2></button>{expandedCategories[category] && (<div className="p-4 bg-white rounded-b-lg shadow-inner"><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">{groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}</div></div>)}</div>))) : (<p className="text-center text-gray-500 mt-8">Inga plagg matchade din sökning.</p>)) : (<p className="text-center text-gray-500 mt-8">Inga plagg än. Klicka på plus-knappen.</p>)}
                     <button onClick={() => setShowAddForm(true)} className="fixed bottom-20 right-5 bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700"><PlusIcon /></button>
                 </>
             )}
@@ -783,9 +710,9 @@ function OutfitsView({ owner }) {
     const [showAddForm, setShowAddForm] = useState(false);
     const [availableGarments, setAvailableGarments] = useState([]);
     const [outfitToDelete, setOutfitToDelete] = useState(null);
-    const [viewingGarment, setViewingGarment] = useState(null); // För modalen
-    const outfitsPath = `/artifacts/${appId}/users/${owner.id}/outfits`;
-    const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
+    const [viewingGarment, setViewingGarment] = useState(null);
+    const outfitsPath = owner.isVirtual ? `/artifacts/${appId}/public/data/memberships/${owner.id}/outfits` : `/artifacts/${appId}/users/${owner.id}/outfits`;
+    const garmentsPath = owner.isVirtual ? `/artifacts/${appId}/public/data/memberships/${owner.id}/garments` : `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
         if (!owner || !db) return;
@@ -815,14 +742,10 @@ function OutfitsView({ owner }) {
     const outfitCategories = ['Sommar', 'Vinter', 'Fest', 'Casual', 'Övrigt'];
     const sortedCategories = outfitCategories.filter(cat => groupedOutfits[cat]).concat(Object.keys(groupedOutfits).filter(cat => !outfitCategories.includes(cat)));
 
-
     return (
         <div>
             <Modal isOpen={!!outfitToDelete} onClose={() => setOutfitToDelete(null)} onConfirm={confirmDelete} title="Ta bort Outfit"><p>Är du säker på att du vill ta bort outfiten "{outfitToDelete?.name}"?</p></Modal>
-            <Modal isOpen={!!viewingGarment} onClose={() => setViewingGarment(null)} title={viewingGarment?.name || "Plagg"} showConfirm={false}>
-                <GarmentDetailView garment={viewingGarment} />
-            </Modal>
-            
+            <Modal isOpen={!!viewingGarment} onClose={() => setViewingGarment(null)} title={viewingGarment?.name || "Plagg"} showConfirm={false}> <GarmentDetailView garment={viewingGarment} /> </Modal>
             {showAddForm ? <AddOutfitForm onAdd={addOutfit} onCancel={() => setShowAddForm(false)} availableGarments={availableGarments} /> : (
                 <>
                     {outfits.length > 0 ? (
@@ -834,16 +757,13 @@ function OutfitsView({ owner }) {
                                 </div>
                             </div>
                         ))
-                    ) : (
-                         <p className="text-center text-gray-500 mt-8">Inga outfits än. Klicka på plus-knappen för att skapa en!</p>
-                    )}
+                    ) : (<p className="text-center text-gray-500 mt-8">Inga outfits än. Klicka på plus-knappen.</p>)}
                     <button onClick={() => setShowAddForm(true)} className="fixed bottom-20 right-5 bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700"><PlusIcon /></button>
                 </>
             )}
         </div>
     );
 }
-
 
 // --- Komponent: Plagg-kort ---
 function GarmentCard({ garment, onDelete }) {
@@ -900,39 +820,29 @@ function AddGarmentForm({ onAdd, onCancel }) {
     const [isUploading, setIsUploading] = useState(false);
     const [error, setError] = useState('');
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
-            const file = e.target.files[0];
-            setImageFile(file);
-            const reader = new FileReader();
-            reader.onloadend = () => setImagePreview(reader.result);
-            reader.readAsDataURL(file);
+            setImageFile(e.target.files[0]);
+            setImagePreview(URL.createObjectURL(e.target.files[0]));
         }
     };
      
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!name) {
-            setError("Plaggets namn måste fyllas i.");
-            return;
-        }
+        if (!name) { setError("Plaggets namn måste fyllas i."); return; }
         setIsUploading(true);
         setError('');
         
         try {
             let imageUrl = '';
-            if (imageFile) {
-                imageUrl = await resizeImage(imageFile);
-            }
+            if (imageFile) imageUrl = await resizeImage(imageFile);
             await onAdd({ name, category, size, location, notes, imageUrl });
+            onCancel(); // Stäng formuläret efter lyckad uppladdning
         } catch (err) {
-             if (err.message.includes('longer than 1048487 bytes')) {
-                setError('Bilden är för stor även efter komprimering. Välj en mindre bild.');
-             } else {
-                setError('Ett fel uppstod vid uppladdning.');
-             }
+             if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
+             else setError('Ett fel uppstod vid uppladdning.');
         } finally {
             setIsUploading(false);
         }
@@ -943,13 +853,13 @@ function AddGarmentForm({ onAdd, onCancel }) {
             <h2 className="text-2xl font-bold mb-4">Lägg till nytt plagg</h2>
             {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
             <form onSubmit={handleSubmit} className="space-y-4">
-                <label htmlFor="garment-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="garment-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
+                <label htmlFor="garment-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-dashed rounded-lg cursor-pointer bg-gray-50">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-cover rounded-lg" /> : <span><CameraIcon /> Välj bild</span>}<input id="garment-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
                 <input type="text" placeholder="Plaggets namn (ex. Blå T-shirt)" value={name} onChange={e => setName(e.target.value)} required className="w-full p-2 border rounded"/>
                 <select value={category} onChange={e => setCategory(e.target.value)} className="w-full p-2 border rounded">{categories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                 <input type="text" placeholder="Storlek" value={size} onChange={e => setSize(e.target.value)} className="w-full p-2 border rounded"/>
                 <input type="text" placeholder="Plats (ex. I byrålådan)" value={location} onChange={e => setLocation(e.target.value)} className="w-full p-2 border rounded"/>
                 <textarea placeholder="Anteckningar" value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-2 border rounded"></textarea>
-                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button><button type="submit" disabled={isUploading || !name} className="bg-blue-600 text-white px-4 py-2 rounded font-semibold disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara plagget'}</button></div>
+                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 px-4 py-2 rounded">Avbryt</button><button type="submit" disabled={isUploading} className="bg-blue-600 text-white px-4 py-2 rounded disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara'}</button></div>
             </form>
         </div>
     );
@@ -970,46 +880,33 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
-            const file = e.target.files[0];
-            setImageFile(file);
-            const reader = new FileReader();
-            reader.onloadend = () => setImagePreview(reader.result);
-            reader.readAsDataURL(file);
+            setImageFile(e.target.files[0]);
+            setImagePreview(URL.createObjectURL(e.target.files[0]));
         }
     };
 
-    const handleGarmentSelect = (garmentId) => {
+    const toggleGarment = (id) => {
         const newSelection = new Set(selectedGarmentIds);
-        if (newSelection.has(garmentId)) newSelection.delete(garmentId);
-        else newSelection.add(garmentId);
+        if (newSelection.has(id)) newSelection.delete(id);
+        else newSelection.add(id);
         setSelectedGarmentIds(newSelection);
     };
      
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!name) {
-            setError("Outfitens namn måste fyllas i.");
-            return;
-        }
+        if (!name) { setError("Outfitens namn måste fyllas i."); return; }
         setIsUploading(true);
         setError('');
         
         try {
             let imageUrl = '';
-            if (imageFile) {
-                imageUrl = await resizeImage(imageFile);
-            }
-            const linkedGarments = availableGarments
-                .filter(g => selectedGarmentIds.has(g.id))
-                .map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '', category: g.category, location: g.location, size: g.size, notes: g.notes }));
-
+            if (imageFile) imageUrl = await resizeImage(imageFile);
+            const linkedGarments = availableGarments.filter(g => selectedGarmentIds.has(g.id)).map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '', category: g.category, location: g.location, size: g.size, notes: g.notes }));
             await onAdd({ name, notes, category, imageUrl, linkedGarments });
+            onCancel();
         } catch(err) {
-            if (err.message.includes('longer than 1048487 bytes')) {
-                setError('Bilden är för stor. Välj en mindre bild eller en med lägre kvalitet.');
-             } else {
-                setError('Ett fel uppstod vid uppladdning.');
-             }
+            if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
+            else setError('Ett fel uppstod.');
         } finally {
             setIsUploading(false);
         }
@@ -1020,24 +917,22 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
             <h2 className="text-2xl font-bold mb-4">Skapa ny Outfit</h2>
             {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
             <form onSubmit={handleSubmit} className="space-y-4">
-                <label htmlFor="outfit-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="outfit-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
+                <label htmlFor="outfit-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-dashed rounded-lg cursor-pointer bg-gray-50">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-cover rounded-lg" /> : <span><CameraIcon /> Välj bild</span>}<input id="outfit-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
                 <input type="text" placeholder="Outfitens namn" value={name} onChange={e => setName(e.target.value)} required className="w-full p-2 border rounded"/>
                 <select value={category} onChange={e => setCategory(e.target.value)} className="w-full p-2 border rounded">{outfitCategories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                 <textarea placeholder="Anteckningar" value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-2 border rounded"></textarea>
                 <div>
-                    <h3 className="font-semibold mb-2">Välj plagg som ingår:</h3>
-                    {availableGarments.length > 0 ? (
-                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 border rounded-lg">
-                            {availableGarments.map(g => (
-                                <div key={g.id} onClick={() => handleGarmentSelect(g.id)} className={`cursor-pointer border-2 rounded-lg p-1 transition-all ${selectedGarmentIds.has(g.id) ? 'border-blue-500 bg-blue-50' : 'border-transparent'}`}>
-                                    <img src={g.imageUrl || 'https://placehold.co/100x100/eeeeee/cccccc?text=?'} alt={g.name} className="w-full h-20 object-cover rounded"/>
-                                    <p className="text-xs text-center truncate mt-1">{g.name}</p>
-                                </div>
-                            ))}
-                        </div>
-                    ) : <p className="text-sm text-gray-400">Du måste lägga till plagg i garderoben först.</p>}
+                    <h3 className="font-semibold mb-2">Välj plagg:</h3>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto border p-2 rounded-lg">
+                        {availableGarments.map(g => (
+                            <div key={g.id} onClick={() => toggleGarment(g.id)} className={`cursor-pointer border-2 rounded-lg p-1 ${selectedGarmentIds.has(g.id) ? 'border-blue-500' : 'border-transparent'}`}>
+                                <img src={g.imageUrl || 'https://placehold.co/100x100/eeeeee/cccccc?text=?'} alt={g.name} className="w-full h-20 object-cover rounded"/>
+                                <p className="text-xs text-center truncate mt-1">{g.name}</p>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button><button type="submit" disabled={isUploading || !name} className="bg-blue-600 text-white px-4 py-2 rounded font-semibold disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara Outfit'}</button></div>
+                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 px-4 py-2 rounded">Avbryt</button><button type="submit" disabled={isUploading} className="bg-blue-600 text-white px-4 py-2 rounded disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara'}</button></div>
             </form>
         </div>
     );
