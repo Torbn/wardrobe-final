@@ -240,20 +240,28 @@ function FamilySetup({ user, appData }) {
     useEffect(() => {
         const createFamily = async () => {
             if (!user || !appData.name) return;
-            try {
-                const familyId = doc(collection(db, '_')).id;
-                const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
-                await setDoc(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
-                const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
-                await setDoc(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
-                const userProfileRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
-                await updateDoc(userProfileRef, { familyId: familyId });
-            } catch (e) {
-                console.error("Family creation error:", e);
-                setError("Kunde inte skapa familjen. Prova att ladda om sidan.");
-            }
+            const familyId = doc(collection(db, '_')).id;
+            const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
+            await setDoc(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
+            const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
+            await setDoc(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
+            const userProfileRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
+            await updateDoc(userProfileRef, { familyId: familyId });
         };
-        createFamily();
+
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Timeout")), 20000) // 20 sekunders timeout
+        );
+
+        Promise.race([createFamily(), timeoutPromise])
+            .catch(e => {
+                console.error("Family creation failed:", e);
+                if (e.message === "Timeout") {
+                    setError("Konfigureringen tog för lång tid. Ladda om sidan och försök igen.");
+                } else {
+                    setError("Kunde inte skapa familjen. Prova att ladda om sidan.");
+                }
+            });
     }, [user, appData]);
 
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
@@ -282,6 +290,9 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
             await actionPromise;
         } catch (e) {
             setError(e.message || 'Något gick fel. Försök igen.');
+        } finally {
+            // Detta block körs oavsett om det lyckades eller misslyckades, men efter att `await` är klar.
+            // I detta flöde kommer komponenten att avmonteras vid lyckat anrop, så detta är mest en säkerhet.
             setIsProcessing(false);
         }
     };
