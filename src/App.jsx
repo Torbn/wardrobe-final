@@ -87,6 +87,48 @@ function SkeletonLoader() {
     );
 }
 
+// --- Komponent för anslutningsskärm ---
+function ConnectionGate({ onConnect }) {
+    const [configJson, setConfigJson] = useState('');
+    const [error, setError] = useState('');
+
+    const handleConnect = () => {
+        if (!configJson) {
+            setError("Fältet kan inte vara tomt.");
+            return;
+        }
+        onConnect(configJson, setError);
+    };
+
+    return (
+        <div className="flex items-center justify-center h-screen bg-gray-100 p-4">
+            <div className="bg-white p-8 rounded-lg shadow-xl max-w-lg w-full text-center">
+                <h1 className="text-2xl font-bold mb-4">Anslut till databasen</h1>
+                <p className="text-gray-600 mb-6">
+                    Klistra in din Firebase-konfiguration (hela JSON-objektet) nedan för att starta appen.
+                </p>
+                <textarea
+                    className="w-full h-48 p-3 border rounded mb-4 font-mono text-sm bg-gray-50 focus:ring-2 focus:ring-blue-500"
+                    placeholder='{ "apiKey": "...", "authDomain": "...", ... }'
+                    value={configJson}
+                    onChange={(e) => setConfigJson(e.target.value)}
+                />
+                <button
+                    onClick={handleConnect}
+                    className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                >
+                    Anslut
+                </button>
+                {(error) && <p className="text-red-500 text-sm mt-4">{error}</p>}
+                 <p className="text-xs text-gray-400 mt-4">
+                    Denna information sparas inte, du kan behöva klistra in den igen om du laddar om sidan.
+                </p>
+            </div>
+        </div>
+    );
+}
+
+
 // --- Huvudkomponent: App ---
 export default function App() {
     const [user, setUser] = useState(null);
@@ -96,7 +138,8 @@ export default function App() {
     const [firebaseReady, setFirebaseReady] = useState(false);
     
     useEffect(() => {
-        const initFirebase = () => {
+        // Försök att auto-ansluta om konfigurationen redan finns (t.ex. i förhandsgranskning)
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
             try {
                 const firebaseConfig = JSON.parse(__firebase_config);
                 if (firebaseConfig && firebaseConfig.apiKey) {
@@ -106,43 +149,33 @@ export default function App() {
                         db = getFirestore(app);
                     }
                     setFirebaseReady(true);
-                    return true;
                 }
-                throw new Error("Ogiltigt Firebase config-objekt");
             } catch (e) {
-                console.error("Firebase Init Error:", e);
-                setError(`Kunde inte initiera databasen: ${e.message}`);
-                setLoading(false);
-                return false;
+                console.warn("Automatisk konfiguration misslyckades. Faller tillbaka till manuell inmatning.");
             }
-        };
-
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-            if(initFirebase()) return;
         }
-
-        let pollCount = 0;
-        const maxPolls = 40; // 40 * 200ms = 8 seconds
-        const poller = setInterval(() => {
-            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                clearInterval(poller);
-                initFirebase();
-            } else if (pollCount >= maxPolls) {
-                clearInterval(poller);
-                if(!firebaseReady) {
-                    setError("Kunde inte ansluta: Konfigurationen tog för lång tid att ladda. Prova att ladda om sidan.");
-                    setLoading(false);
-                }
-            }
-            pollCount++;
-        }, 200);
-
-        return () => clearInterval(poller);
     }, []);
+
+    const handleManualConnect = (configJson, setConnectionError) => {
+        try {
+            const firebaseConfig = JSON.parse(configJson);
+            if (!firebaseConfig.apiKey) throw new Error("Konfigurationen är ogiltig, 'apiKey' saknas.");
+            if (!app) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            }
+            setFirebaseReady(true);
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+            setConnectionError(`Anslutning misslyckades: ${e.message}`);
+        }
+    };
 
     useEffect(() => {
         if (!firebaseReady) return;
 
+        setLoading(true);
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
@@ -184,10 +217,10 @@ export default function App() {
         await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
     }
     
+    if (!firebaseReady) return <ConnectionGate onConnect={handleManualConnect} />;
+    if (loading) return <SkeletonLoader />;
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
     
-    if (!firebaseReady || loading) return <SkeletonLoader />;
-
     if (user && appData) {
         if (appData.mode === 'family' && !appData.familyId) {
              if (appData.status === 'pending') return <PendingApprovalScreen />;
@@ -489,6 +522,7 @@ function WardrobeView({ owner }) {
     const [showAddForm, setShowAddForm] = useState(false);
     const [garmentToDelete, setGarmentToDelete] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [expandedCategories, setExpandedCategories] = useState({});
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
@@ -531,13 +565,26 @@ function WardrobeView({ owner }) {
 
     const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
     const sortedCategories = categories.filter(cat => groupedGarments[cat]).concat(Object.keys(groupedGarments).filter(cat => !categories.includes(cat)));
+    
+    const toggleCategory = (category) => {
+        setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
+    };
+
+    const expandAll = () => {
+        const allExpanded = sortedCategories.reduce((acc, cat) => ({...acc, [cat]: true}), {});
+        setExpandedCategories(allExpanded);
+    };
+    
+    const collapseAll = () => {
+        setExpandedCategories({});
+    };
 
     return (
         <div>
             <Modal isOpen={!!garmentToDelete} onClose={() => setGarmentToDelete(null)} onConfirm={confirmDelete} title="Ta bort plagg"><p>Är du säker på att du vill ta bort plagget "{garmentToDelete?.name}"?</p></Modal>
             {showAddForm ? <AddGarmentForm onAdd={addGarment} onCancel={() => setShowAddForm(false)} /> : (
                 <>
-                    <div className="mb-6">
+                    <div className="mb-4">
                         <input
                             type="search"
                             placeholder="Sök i garderoben..."
@@ -546,15 +593,29 @@ function WardrobeView({ owner }) {
                             onChange={e => setSearchTerm(e.target.value)}
                         />
                     </div>
+                    <div className="flex gap-2 mb-6">
+                        <button onClick={expandAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Expandera alla</button>
+                        <button onClick={collapseAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Kollapsa alla</button>
+                    </div>
+
                     {garments.length > 0 ? (
                         filteredGarments.length > 0 ? (
                             sortedCategories.map(category => (
                                 groupedGarments[category] &&
-                                <div key={category} className="mb-8">
-                                    <h2 className="text-2xl font-bold border-b pb-2 mb-4">{category}</h2>
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                        {groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}
-                                    </div>
+                                <div key={category} className="mb-2">
+                                    <button onClick={() => toggleCategory(category)} className="w-full text-left bg-gray-50 hover:bg-gray-100 p-3 rounded-t-lg border-b">
+                                        <h2 className="text-xl font-bold flex justify-between items-center">
+                                            {category} ({groupedGarments[category].length})
+                                            <span className={`transform transition-transform ${expandedCategories[category] ? 'rotate-180' : ''}`}>▼</span>
+                                        </h2>
+                                    </button>
+                                    {expandedCategories[category] && (
+                                        <div className="p-4 bg-white rounded-b-lg shadow-inner">
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                                                {groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ))
                         ) : (
