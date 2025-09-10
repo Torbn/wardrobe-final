@@ -87,6 +87,47 @@ function SkeletonLoader() {
     );
 }
 
+// --- Komponent för anslutningsskärm ---
+function ConnectionGate({ onConnect, initialError }) {
+    const [configJson, setConfigJson] = useState('');
+    const [error, setError] = useState(initialError);
+
+    const handleConnect = () => {
+        if (!configJson) {
+            setError("Fältet kan inte vara tomt.");
+            return;
+        }
+        onConnect(configJson, setError);
+    };
+
+    return (
+        <div className="flex items-center justify-center h-screen bg-gray-100 p-4">
+            <div className="bg-white p-8 rounded-lg shadow-xl max-w-lg w-full text-center">
+                <h1 className="text-2xl font-bold mb-4">Anslut till databasen</h1>
+                <p className="text-gray-600 mb-6">
+                    Klistra in din Firebase-konfiguration (hela JSON-objektet) nedan för att starta appen.
+                </p>
+                <textarea
+                    className="w-full h-48 p-3 border rounded mb-4 font-mono text-sm bg-gray-50 focus:ring-2 focus:ring-blue-500"
+                    placeholder='{ "apiKey": "...", "authDomain": "...", ... }'
+                    value={configJson}
+                    onChange={(e) => setConfigJson(e.target.value)}
+                />
+                <button
+                    onClick={handleConnect}
+                    className="w-full bg-blue-600 text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                >
+                    Anslut
+                </button>
+                {(error) && <p className="text-red-500 text-sm mt-4">{error}</p>}
+                 <p className="text-xs text-gray-400 mt-4">
+                    Denna information sparas inte, du kan behöva klistra in den igen om du laddar om sidan.
+                </p>
+            </div>
+        </div>
+    );
+}
+
 
 // --- Huvudkomponent: App ---
 export default function App() {
@@ -95,49 +136,45 @@ export default function App() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [firebaseReady, setFirebaseReady] = useState(false);
-
-    // Effect for Firebase Initialization, runs once on component mount.
+    
+    // Försök att auto-ansluta en gång
     useEffect(() => {
-        const maxWaitTime = 10000; // 10 seconds timeout
-        const pollInterval = 100; // check every 100ms
-        let elapsedTime = 0;
-
-        const intervalId = setInterval(() => {
-            elapsedTime += pollInterval;
-
-            // Check if the global config variable is available
-            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                clearInterval(intervalId); // Stop polling
-                try {
-                    const firebaseConfig = JSON.parse(__firebase_config);
-                    if (firebaseConfig && firebaseConfig.apiKey) {
-                        app = initializeApp(firebaseConfig);
-                        auth = getAuth(app);
-                        db = getFirestore(app);
-                        setFirebaseReady(true); // Signal that Firebase is ready
-                    } else {
-                        throw new Error("Parsed Firebase config is invalid.");
-                    }
-                } catch (e) {
-                    console.error("Firebase Initialization Error:", e);
-                    setError(`Firebase kunde inte ansluta: ${e.message}`);
-                    setLoading(false);
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try {
+                const firebaseConfig = JSON.parse(__firebase_config);
+                if (firebaseConfig && firebaseConfig.apiKey) {
+                    app = initializeApp(firebaseConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+                    setFirebaseReady(true);
                 }
-            } else if (elapsedTime >= maxWaitTime) {
-                // If we've waited too long, stop and show an error
-                clearInterval(intervalId);
-                setError("Anslutningen till databasen tog för lång tid. Prova att ladda om sidan.");
-                setLoading(false);
+            } catch (e) {
+                console.warn("Automatisk konfiguration misslyckades. Faller tillbaka till manuell inmatning.");
             }
-        }, pollInterval);
-
-        return () => clearInterval(intervalId); // Cleanup on component unmount
+        }
     }, []);
+
+
+    const handleManualConnect = (configJson, setConnectionError) => {
+        try {
+            const firebaseConfig = JSON.parse(configJson);
+            if (!firebaseConfig.apiKey) {
+                throw new Error("Konfigurationen är ogiltig, 'apiKey' saknas.");
+            }
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            setFirebaseReady(true);
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+            setConnectionError(`Anslutning misslyckades: ${e.message}`);
+        }
+    };
 
 
     // Effect for handling Authentication, runs when Firebase is ready.
     useEffect(() => {
-        if (!firebaseReady) return; // Wait for initialization to complete
+        if (!firebaseReady) return;
 
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
             if (currentUser) {
@@ -163,7 +200,7 @@ export default function App() {
             }
         });
         return () => unsubscribe();
-    }, [firebaseReady]); // This effect depends on firebase readiness
+    }, [firebaseReady]);
 
     const handleProfileSetup = async (name, mode) => {
         if (!user) return; 
@@ -209,6 +246,10 @@ export default function App() {
             setError(e.message || "Kunde inte skicka förfrågan."); 
             throw e; // Kasta om felet
         }
+    }
+    
+    if (!firebaseReady) {
+        return <ConnectionGate onConnect={handleManualConnect} />;
     }
 
     if (loading) return <SkeletonLoader />;
@@ -768,5 +809,4 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         </div>
     );
 }
-
 
