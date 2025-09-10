@@ -183,16 +183,23 @@ export default function App() {
         if (!user) throw new Error("Användare inte inloggad.");
         if (!db) throw new Error("Databasen är inte ansluten.");
         
-        const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
-        const familyDoc = await getDoc(familyDocRef);
-        
-        if (!familyDoc.exists()) {
-             throw new Error("Familjekoden är ogiltig.");
+        try {
+            const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
+            const familyDoc = await getDoc(familyDocRef);
+            
+            if (!familyDoc.exists()) {
+                 throw new Error("Familjekoden är ogiltig.");
+            }
+            
+            const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
+            await setDoc(joinRequestRef, { familyId, requesterId: user.uid, requesterName: name, status: 'pending' });
+            await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
+        } catch (e) {
+            if (e.code === 'unavailable') {
+                throw new Error("Kunde inte ansluta till databasen. Kontrollera din internetanslutning och försök igen.");
+            }
+            throw e;
         }
-        
-        const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
-        await setDoc(joinRequestRef, { familyId, requesterId: user.uid, requesterName: name, status: 'pending' });
-        await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
     }
     
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
@@ -476,6 +483,7 @@ function WardrobeManager({ user, appData }) {
 function SettingsView({ user, appData, members = [] }) {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [joinRequests, setJoinRequests] = useState([]);
+    const [newMemberName, setNewMemberName] = useState('');
     const currentUserData = members.find(m => m.id === user.uid);
     const role = currentUserData?.role;
 
@@ -505,6 +513,33 @@ function SettingsView({ user, appData, members = [] }) {
             // Fallback for browsers that don't support Web Share API
             navigator.clipboard.writeText(inviteLink);
             alert("Inbjudningslänk kopierad till urklipp!");
+        }
+    };
+    
+    const handleAddVirtualMember = async () => {
+        if (!newMemberName.trim() || !appData.familyId) return;
+
+        try {
+            const virtualMemberId = doc(collection(db, '_')).id;
+            const userDocRef = doc(db, `/artifacts/${appId}/users/${virtualMemberId}`);
+            const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`), virtualMemberId);
+            
+            const batch = writeBatch(db);
+
+            batch.set(userDocRef, { name: newMemberName, mode: 'family', familyId: appData.familyId, isVirtual: true });
+            batch.set(membershipDocRef, {
+                userId: virtualMemberId,
+                familyId: appData.familyId,
+                name: newMemberName,
+                role: 'virtual',
+                isPrivate: false,
+            });
+
+            await batch.commit();
+            setNewMemberName('');
+        } catch (e) {
+            console.error("Error adding virtual member:", e);
+            alert("Kunde inte lägga till medlemmen.");
         }
     };
 
@@ -564,10 +599,30 @@ function SettingsView({ user, appData, members = [] }) {
                         <div>
                             <h3 className="font-semibold mb-2">Bjud in nya medlemmar</h3>
                             <p className="text-sm text-gray-600 mb-2">Dela familjekoden nedan eller skicka en inbjudningslänk.</p>
-                            <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId.substring(0, 6).toUpperCase()}</p>
+                            <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId.substring(0, 4).toUpperCase()}</p>
                             <button onClick={handleShareInvite} className="w-full mt-2 bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600">
                                 Bjud in med länk
                             </button>
+                        </div>
+                         <div>
+                            <h3 className="font-semibold mt-6 mb-2">Lägg till familjemedlem (utan konto)</h3>
+                            <p className="text-sm text-gray-600 mb-2">För barn eller andra som inte har en egen telefon.</p>
+                            <div className="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    value={newMemberName} 
+                                    onChange={(e) => setNewMemberName(e.target.value)}
+                                    placeholder="Barnets namn"
+                                    className="flex-grow p-2 border rounded"
+                                />
+                                <button 
+                                    onClick={handleAddVirtualMember}
+                                    disabled={!newMemberName.trim()}
+                                    className="bg-green-500 text-white px-4 py-2 text-sm rounded disabled:bg-gray-300"
+                                >
+                                    Lägg till
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -607,11 +662,7 @@ function WardrobeView({ owner }) {
     }, [garmentsPath, owner]);
 
     const addGarment = async (garmentData) => {
-        try {
-            await addDoc(collection(db, garmentsPath), { ...garmentData, createdAt: serverTimestamp() });
-        } finally {
-            setShowAddForm(false);
-        }
+        await addDoc(collection(db, garmentsPath), { ...garmentData, createdAt: serverTimestamp() });
     };
 
     const confirmDelete = async () => {
@@ -744,11 +795,7 @@ function OutfitsView({ owner }) {
     }, [garmentsPath, outfitsPath, owner]);
 
     const addOutfit = async (outfitData) => {
-        try {
-            await addDoc(collection(db, outfitsPath), { ...outfitData, createdAt: serverTimestamp() });
-        } finally {
-            setShowAddForm(false);
-        }
+        await addDoc(collection(db, outfitsPath), { ...outfitData, createdAt: serverTimestamp() });
     };
 
     const confirmDelete = async () => {
@@ -886,7 +933,8 @@ function AddGarmentForm({ onAdd, onCancel }) {
              } else {
                 setError('Ett fel uppstod vid uppladdning.');
              }
-             setIsUploading(false);
+        } finally {
+            setIsUploading(false);
         }
     };
 
@@ -962,7 +1010,8 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
              } else {
                 setError('Ett fel uppstod vid uppladdning.');
              }
-             setIsUploading(false);
+        } finally {
+            setIsUploading(false);
         }
     };
 
