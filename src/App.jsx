@@ -46,16 +46,16 @@ const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => ne
 
 
 // --- Generisk modal-komponent ---
-function Modal({ isOpen, onClose, onConfirm, title, children, confirmText = "Bekräfta" }) {
+function Modal({ isOpen, onClose, onConfirm, title, children, confirmText = "Bekräfta", showConfirm = true }) {
     if (!isOpen) return null;
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
-            <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4" onClick={onClose}>
+            <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full" onClick={e => e.stopPropagation()}>
                 <h3 className="text-lg font-bold mb-4">{title}</h3>
-                <div className="mb-6">{children}</div>
+                <div className="mb-6 max-h-[70vh] overflow-y-auto">{children}</div>
                 <div className="flex justify-end gap-4">
-                    <button onClick={onClose} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button>
-                    <button onClick={onConfirm} className="bg-red-600 text-white px-4 py-2 rounded font-semibold">{confirmText}</button>
+                    <button onClick={onClose} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">{showConfirm ? "Avbryt" : "Stäng"}</button>
+                    {showConfirm && <button onClick={onConfirm} className="bg-red-600 text-white px-4 py-2 rounded font-semibold">{confirmText}</button>}
                 </div>
             </div>
         </div>
@@ -243,22 +243,20 @@ function FamilySetup({ user, appData }) {
 
             const batch = writeBatch(db);
             const familyId = doc(collection(db, '_')).id;
-
+            
             const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
             const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
             const userProfileRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
 
-            // Köa upp alla operationer
             batch.set(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
             batch.set(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
             batch.update(userProfileRef, { familyId: familyId });
 
-            // Skicka iväg alla som en enda transaktion
             await batch.commit();
         };
 
         const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Timeout")), 20000) // 20 sekunders timeout
+            setTimeout(() => reject(new Error("Timeout")), 20000)
         );
 
         Promise.race([createFamilyWithBatch(), timeoutPromise])
@@ -296,10 +294,10 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
         setProcessingMessage(message);
         try {
             await actionPromise;
+            // Vid lyckad åtgärd kommer komponenten att bytas ut, så vi behöver inte sätta isProcessing till false här.
         } catch (e) {
             setError(e.message || 'Något gick fel. Försök igen.');
-            // Se till att laddningsskärmen försvinner vid fel
-            setIsProcessing(false);
+            setIsProcessing(false); // Stäng laddningsvyn endast vid fel
         }
     };
 
@@ -558,7 +556,7 @@ function WardrobeView({ owner }) {
             <Modal isOpen={!!garmentToDelete} onClose={() => setGarmentToDelete(null)} onConfirm={confirmDelete} title="Ta bort plagg"><p>Är du säker på att du vill ta bort plagget "{garmentToDelete?.name}"?</p></Modal>
             {showAddForm ? <AddGarmentForm onAdd={addGarment} onCancel={() => setShowAddForm(false)} /> : (
                 <>
-                    {Object.keys(groupedGarments).length > 0 ? (
+                    {garments.length > 0 ? (
                         sortedCategories.map(category => (
                             <div key={category} className="mb-8">
                                 <h2 className="text-2xl font-bold border-b pb-2 mb-4">{category}</h2>
@@ -577,12 +575,31 @@ function WardrobeView({ owner }) {
     );
 }
 
+// --- Komponent: Detaljvy för plagg ---
+function GarmentDetailView({ garment }) {
+    if (!garment) return null;
+    return (
+        <div className="space-y-3">
+            <img src={garment.imageUrl || 'https://placehold.co/300x400/eeeeee/cccccc?text=Inget+foto'} alt={garment.name} className="w-full aspect-[3/4] object-cover rounded-lg shadow-sm" />
+            <div>
+                <h3 className="text-2xl font-bold">{garment.name}</h3>
+                <p className="text-md text-gray-600"><strong>Kategori:</strong> {garment.category}</p>
+                <p className="text-md text-gray-600"><strong>Storlek:</strong> {garment.size || 'N/A'}</p>
+                <p className="text-md text-gray-600"><strong>Plats:</strong> {garment.location || 'N/A'}</p>
+                {garment.notes && <p className="text-md text-gray-600 mt-2 italic">"{garment.notes}"</p>}
+            </div>
+        </div>
+    );
+}
+
+
 // --- Komponent: Outfit-vyn ---
 function OutfitsView({ owner }) {
     const [outfits, setOutfits] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [availableGarments, setAvailableGarments] = useState([]);
     const [outfitToDelete, setOutfitToDelete] = useState(null);
+    const [viewingGarment, setViewingGarment] = useState(null); // För modalen
     const outfitsPath = `/artifacts/${appId}/users/${owner.id}/outfits`;
     const garmentsPath = `/artifacts/${appId}/users/${owner.id}/garments`;
 
@@ -605,15 +622,38 @@ function OutfitsView({ owner }) {
         }
     };
 
+    const groupedOutfits = outfits.reduce((acc, outfit) => {
+        const category = outfit.category || 'Övrigt';
+        if (!acc[category]) acc[category] = [];
+        acc[category].push(outfit);
+        return acc;
+    }, {});
+
+    const outfitCategories = ['Sommar', 'Vinter', 'Fest', 'Casual', 'Övrigt'];
+    const sortedCategories = outfitCategories.filter(cat => groupedOutfits[cat]).concat(Object.keys(groupedOutfits).filter(cat => !outfitCategories.includes(cat)));
+
+
     return (
         <div>
             <Modal isOpen={!!outfitToDelete} onClose={() => setOutfitToDelete(null)} onConfirm={confirmDelete} title="Ta bort Outfit"><p>Är du säker på att du vill ta bort outfiten "{outfitToDelete?.name}"?</p></Modal>
+            <Modal isOpen={!!viewingGarment} onClose={() => setViewingGarment(null)} title={viewingGarment?.name || "Plagg"} showConfirm={false}>
+                <GarmentDetailView garment={viewingGarment} />
+            </Modal>
+            
             {showAddForm ? <AddOutfitForm onAdd={addOutfit} onCancel={() => setShowAddForm(false)} availableGarments={availableGarments} /> : (
                 <>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                        {outfits.map(o => <OutfitCard key={o.id} outfit={o} onDelete={() => setOutfitToDelete(o)} />)}
-                    </div>
-                    {outfits.length === 0 && <p className="text-center text-gray-500 mt-8">Inga outfits än. Klicka på plus-knappen för att skapa en!</p>}
+                    {outfits.length > 0 ? (
+                        sortedCategories.map(category => (
+                            <div key={category} className="mb-8">
+                                <h2 className="text-2xl font-bold border-b pb-2 mb-4">{category}</h2>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                                     {groupedOutfits[category].map(o => <OutfitCard key={o.id} outfit={o} onDelete={() => setOutfitToDelete(o)} onGarmentClick={setViewingGarment} />)}
+                                </div>
+                            </div>
+                        ))
+                    ) : (
+                         <p className="text-center text-gray-500 mt-8">Inga outfits än. Klicka på plus-knappen för att skapa en!</p>
+                    )}
                     <button onClick={() => setShowAddForm(true)} className="fixed bottom-20 right-5 bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700"><PlusIcon /></button>
                 </>
             )}
@@ -639,22 +679,22 @@ function GarmentCard({ garment, onDelete }) {
 }
 
 // --- Komponent: Outfit-kort ---
-function OutfitCard({ outfit, onDelete }) {
+function OutfitCard({ outfit, onDelete, onGarmentClick }) {
     return (
         <div className="border rounded-lg overflow-hidden shadow-sm bg-white group relative">
-            <button onClick={onDelete} className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-red-700"><TrashIcon /></button>
+            <button onClick={onDelete} className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-red-700"><TrashIcon /></button>
             <img src={outfit.imageUrl || 'https://placehold.co/300x400/eeeeee/cccccc?text=Outfit'} alt={outfit.name} className="w-full aspect-[3/4] object-cover" />
             <div className="p-3">
-                <h3 className="font-bold text-lg truncate">{outfit.name}</h3>
-                {outfit.notes && <p className="text-sm text-gray-600 italic">"{outfit.notes}"</p>}
+                <h3 className="font-bold truncate">{outfit.name}</h3>
+                 <p className="text-sm text-gray-500">{outfit.category}</p>
+                {outfit.notes && <p className="text-xs text-gray-500 italic mt-1">"{outfit.notes}"</p>}
                 <div className="mt-2">
-                    <h4 className="font-semibold text-sm">Ingående plagg:</h4>
+                    <h4 className="font-semibold text-xs mb-1">Ingår:</h4>
                     {outfit.linkedGarments?.length > 0 ? (
-                        <div className="flex flex-wrap gap-2 mt-1">
+                        <div className="flex flex-wrap gap-1">
                             {outfit.linkedGarments.map(g => (
-                                <div key={g.id} className="flex items-center gap-2 bg-gray-100 rounded-full py-1 pl-1 pr-2 text-xs">
-                                    <img src={g.imageUrl || 'https://placehold.co/40x40/eeeeee/cccccc?text=?'} alt={g.name} className="w-6 h-6 rounded-full object-cover" />
-                                    <span className="truncate">{g.name}</span>
+                                <div key={g.id} onClick={() => onGarmentClick(g)} className="cursor-pointer" title={g.name}>
+                                    <img src={g.imageUrl || 'https://placehold.co/40x40/eeeeee/cccccc?text=?'} alt={g.name} className="w-8 h-8 rounded-full object-cover border-2 border-white hover:border-blue-500 transition" />
                                 </div>
                             ))}
                         </div>
@@ -691,32 +731,29 @@ function AddGarmentForm({ onAdd, onCancel }) {
      
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!name) {
+            setError("Plaggets namn måste fyllas i.");
+            return;
+        }
         setIsUploading(true);
         setError('');
-        let imageUrl = '';
-        if (imageFile) {
-             try {
-                imageUrl = await resizeImage(imageFile);
-            } catch (err) {
-                console.error("Image processing error:", err);
-                setError("Kunde inte bearbeta bilden. Försök med en annan bild.");
-                setIsUploading(false);
-                return;
-            }
-        }
-
+        
         try {
+            let imageUrl = '';
+            if (imageFile) {
+                imageUrl = await resizeImage(imageFile);
+            }
             await onAdd({ name, category, size, location, notes, imageUrl });
+            // onCancel() anropas inte här, eftersom onAdd() i föräldern kommer att dölja formuläret
         } catch (err) {
              if (err.message.includes('longer than 1048487 bytes')) {
                 setError('Bilden är för stor även efter komprimering. Välj en mindre bild.');
              } else {
                 setError('Ett fel uppstod vid uppladdning.');
              }
-             setIsUploading(false);
-             return;
+        } finally {
+            setIsUploading(false);
         }
-        setIsUploading(false);
     };
 
     return (
@@ -739,13 +776,15 @@ function AddGarmentForm({ onAdd, onCancel }) {
 // --- Komponent: Lägg till Outfit-formulär ---
 function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
     const [name, setName] = useState('');
+    const [category, setCategory] = useState('Casual');
     const [notes, setNotes] = useState('');
     const [imageFile, setImageFile] = useState(null);
     const [imagePreview, setImagePreview] = useState('');
     const [selectedGarmentIds, setSelectedGarmentIds] = useState(new Set());
     const [isUploading, setIsUploading] = useState(false);
     const [error, setError] = useState('');
-
+    
+    const outfitCategories = ['Sommar', 'Vinter', 'Fest', 'Casual', 'Övrigt'];
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
@@ -766,34 +805,32 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
      
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!name) {
+            setError("Outfitens namn måste fyllas i.");
+            return;
+        }
         setIsUploading(true);
         setError('');
-        let imageUrl = '';
-        if (imageFile) {
-            try {
-                imageUrl = await resizeImage(imageFile);
-            } catch (err) {
-                console.error("Image processing error:", err);
-                setError("Kunde inte bearbeta bilden.");
-                setIsUploading(false);
-                return;
-            }
-        }
-         
-        const linkedGarments = availableGarments.filter(g => selectedGarmentIds.has(g.id)).map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '' }));
-
+        
         try {
-            await onAdd({ name, notes, imageUrl, linkedGarments });
+            let imageUrl = '';
+            if (imageFile) {
+                imageUrl = await resizeImage(imageFile);
+            }
+            const linkedGarments = availableGarments
+                .filter(g => selectedGarmentIds.has(g.id))
+                .map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '', category: g.category, location: g.location, size: g.size, notes: g.notes }));
+
+            await onAdd({ name, notes, category, imageUrl, linkedGarments });
         } catch(err) {
             if (err.message.includes('longer than 1048487 bytes')) {
-                setError('Bilden är för stor även efter komprimering. Välj en mindre bild.');
+                setError('Bilden är för stor. Välj en mindre bild eller en med lägre kvalitet.');
              } else {
                 setError('Ett fel uppstod vid uppladdning.');
              }
-             setIsUploading(false);
-             return;
+        } finally {
+            setIsUploading(false);
         }
-        setIsUploading(false);
     };
 
     return (
@@ -803,6 +840,7 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
             <form onSubmit={handleSubmit} className="space-y-4">
                 <label htmlFor="outfit-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="outfit-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
                 <input type="text" placeholder="Outfitens namn" value={name} onChange={e => setName(e.target.value)} required className="w-full p-2 border rounded"/>
+                <select value={category} onChange={e => setCategory(e.target.value)} className="w-full p-2 border rounded">{outfitCategories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                 <textarea placeholder="Anteckningar" value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-2 border rounded"></textarea>
                 <div>
                     <h3 className="font-semibold mb-2">Välj plagg som ingår:</h3>
@@ -815,7 +853,7 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
                                 </div>
                             ))}
                         </div>
-                    ) : <p className="text-sm text-gray-400">Nu måste du lägga till plagg i garderoben först.</p>}
+                    ) : <p className="text-sm text-gray-400">Du måste lägga till plagg i garderoben först.</p>}
                 </div>
                 <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button><button type="submit" disabled={isUploading || !name} className="bg-blue-600 text-white px-4 py-2 rounded font-semibold disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara Outfit'}</button></div>
             </form>
