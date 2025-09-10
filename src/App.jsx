@@ -279,10 +279,20 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
         if (!name || !joinFamilyId || isProcessing) return;
         setIsProcessing(true);
         setError('');
+        
+        const joinPromise = onJoinRequest(name, joinFamilyId);
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Timeout")), 20000) // 20 sekunders timeout
+        );
+
         try {
-            await onJoinRequest(name, joinFamilyId);
+            await Promise.race([joinPromise, timeoutPromise]);
         } catch (e) {
-            setError(e.message || 'Kunde inte skicka förfrågan.');
+            if (e.message === "Timeout") {
+                setError('Förfrågan tog för lång tid. Kontrollera din anslutning och försök igen.');
+            } else {
+                setError(e.message || 'Kunde inte skicka förfrågan.');
+            }
         } finally {
             setIsProcessing(false);
         }
@@ -292,10 +302,20 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
         if (!name || isProcessing) return;
         setIsProcessing(true);
         setError('');
+
+        const setupPromise = onSetup(name, mode);
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Timeout")), 20000) // 20 sekunders timeout
+        );
+
         try {
-            await onSetup(name, mode);
+            await Promise.race([setupPromise, timeoutPromise]);
         } catch (e) {
-            setError('Kunde inte skapa profilen.');
+            if (e.message === "Timeout") {
+                setError('Konfigureringen tog för lång tid. Kontrollera din anslutning och försök igen.');
+            } else {
+                setError('Kunde inte skapa profilen.');
+            }
         } finally {
             setIsProcessing(false);
         }
