@@ -6,6 +6,23 @@ import {
     collection, onSnapshot, query, serverTimestamp, where, writeBatch
 } from 'firebase/firestore';
 
+// ====================================================================================
+//  VIKTIGT STEG: KLISTRA IN DIN FIREBASE-KONFIGURATION HÄR
+// ====================================================================================
+// Du hittar den i ditt Firebase-projekt:
+// Project Settings (kugghjulet) > General > Your apps > Web app > SDK setup and configuration > Config
+const firebaseConfig = {
+  apiKey: "AIzaSyAb1AEgLR0XODwlxJu2zt54ZCfVAHg0f20",
+  authDomain: "wardrobe-1df3d.firebaseapp.com",
+  projectId: "wardrobe-1df3d",
+  storageBucket: "wardrobe-1df3d.firebasestorage.app",
+  messagingSenderId: "101765206611",
+  appId: "1:101765206611:web:ea0da04b1828e20980aca6",
+  measurementId: "G-R9S8L2QKRG"
+};
+// ====================================================================================
+
+
 // --- Helper-ikoner (SVG) ---
 const HomeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
 const OutfitIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>;
@@ -106,47 +123,23 @@ export default function App() {
             setJoinFamilyIdFromUrl(familyId);
         }
 
-        const initFirebase = () => {
-            try {
-                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                    const firebaseConfig = JSON.parse(__firebase_config);
-                    if (firebaseConfig && firebaseConfig.apiKey) {
-                        if (!app) {
-                            app = initializeApp(firebaseConfig);
-                            auth = getAuth(app);
-                            db = getFirestore(app);
-                        }
-                        setFirebaseReady(true);
-                        return true;
-                    }
+        try {
+            if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "AIzaSy...") {
+                if (!app) {
+                    app = initializeApp(firebaseConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
                 }
-                return false;
-            } catch (e) {
-                console.error("Firebase Init Error:", e);
-                return false;
+                setFirebaseReady(true);
+            } else {
+                 setError("Firebase-konfigurationen saknas. Vänligen klistra in den i App.jsx.");
+                 setLoading(false);
             }
-        };
-
-        if (initFirebase()) {
-            return;
+        } catch (e) {
+            console.error("Firebase Init Error:", e);
+            setError(`Kunde inte initiera databasen: ${e.message}`);
+            setLoading(false);
         }
-
-        let pollCount = 0;
-        const maxPolls = 50; // 50 * 200ms = 10 seconds
-        const poller = setInterval(() => {
-            if (initFirebase()) {
-                clearInterval(poller);
-            } else if (pollCount >= maxPolls) {
-                clearInterval(poller);
-                if (!firebaseReady) {
-                    setError("Kunde inte ansluta: Konfigurationen tog för lång tid att ladda. Prova att ladda om sidan.");
-                    setLoading(false);
-                }
-            }
-            pollCount++;
-        }, 200);
-
-        return () => clearInterval(poller);
     }, []);
 
 
