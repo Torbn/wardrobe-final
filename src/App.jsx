@@ -161,9 +161,12 @@ export default function App() {
             if (!firebaseConfig.apiKey) {
                 throw new Error("Konfigurationen är ogiltig, 'apiKey' saknas.");
             }
-            app = initializeApp(firebaseConfig);
-            auth = getAuth(app);
-            db = getFirestore(app);
+            // Förhindra att Firebase initieras flera gånger
+            if (!app) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            }
             setFirebaseReady(true);
         } catch (e) {
             console.error("Firebase Initialization Error:", e);
@@ -269,68 +272,76 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
     const [name, setName] = useState('');
     const [joinFamilyId, setJoinFamilyId] = useState('');
     const [view, setView] = useState('main');
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
 
     const handleJoin = async () => {
-        if (!name || !joinFamilyId || isSubmitting) return;
-        setIsSubmitting(true);
+        if (!name || !joinFamilyId || isProcessing) return;
+        setIsProcessing(true);
         setError('');
         try {
             await onJoinRequest(name, joinFamilyId);
         } catch (e) {
             setError(e.message || 'Kunde inte skicka förfrågan.');
-            setIsSubmitting(false);
+        } finally {
+            setIsProcessing(false);
         }
     };
 
     const handleSetup = async (mode) => {
-        if (!name || isSubmitting) return;
-        setIsSubmitting(true);
+        if (!name || isProcessing) return;
+        setIsProcessing(true);
         setError('');
         try {
             await onSetup(name, mode);
         } catch (e) {
             setError('Kunde inte skapa profilen.');
-            setIsSubmitting(false);
+        } finally {
+            setIsProcessing(false);
         }
     };
 
     if (view === 'join') {
         return (
-            <div className="flex items-center justify-center h-screen">
-                <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
-                    <h2 className="text-2xl font-bold mb-4">Gå med i familj</h2>
-                    {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
-                    <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ditt namn" className="w-full p-2 border rounded mb-4" />
-                    <input type="text" value={joinFamilyId} onChange={e => setJoinFamilyId(e.target.value)} placeholder="Familjekod" className="w-full p-2 border rounded mb-4" />
-                    <button onClick={handleJoin} disabled={!name || !joinFamilyId || isSubmitting} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
-                        {isSubmitting ? 'Skickar...' : 'Skicka förfrågan'}
-                    </button>
-                    <button onClick={() => setView('main')} className="mt-4 text-sm text-gray-600">Tillbaka</button>
+            <>
+                {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">Skickar förfrågan...</div></div>}
+                <div className="flex items-center justify-center h-screen">
+                    <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
+                        <h2 className="text-2xl font-bold mb-4">Gå med i familj</h2>
+                        {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ditt namn" className="w-full p-2 border rounded mb-4" />
+                        <input type="text" value={joinFamilyId} onChange={e => setJoinFamilyId(e.target.value)} placeholder="Familjekod" className="w-full p-2 border rounded mb-4" />
+                        <button onClick={handleJoin} disabled={isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                            Skicka förfrågan
+                        </button>
+                        <button onClick={() => setView('main')} className="mt-4 text-sm text-gray-600">Tillbaka</button>
+                    </div>
                 </div>
-            </div>
+            </>
         );
     }
 
     return (
-        <div className="flex items-center justify-center h-screen">
-            <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
-                <h1 className="text-3xl font-bold mb-2">Välkommen!</h1>
-                <p className="text-gray-600 mb-6">Hur vill du använda appen?</p>
-                {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
-                <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ange ditt namn" className="w-full p-3 border rounded-lg mb-4 text-center" />
-                <div className="space-y-3">
-                    <button onClick={() => handleSetup('personal')} disabled={!name || isSubmitting} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-400">
-                        {isSubmitting ? 'Konfigurerar...' : 'Bara för mig'}
-                    </button>
-                    <button onClick={() => handleSetup('family')} disabled={!name || isSubmitting} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
-                        {isSubmitting ? 'Konfigurerar...' : 'Skapa en familj'}
-                    </button>
-                    <button onClick={() => setView('join')} disabled={isSubmitting} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
+        <>
+            {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">Konfigurerar din garderob...</div></div>}
+            <div className="flex items-center justify-center h-screen">
+                <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
+                    <h1 className="text-3xl font-bold mb-2">Välkommen!</h1>
+                    <p className="text-gray-600 mb-6">Hur vill du använda appen?</p>
+                    {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+                    <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ange ditt namn" className="w-full p-3 border rounded-lg mb-4 text-center" />
+                    <div className="space-y-3">
+                        <button onClick={() => handleSetup('personal')} disabled={!name || isProcessing} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-400">
+                            Bara för mig
+                        </button>
+                        <button onClick={() => handleSetup('family')} disabled={!name || isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                            Skapa en familj
+                        </button>
+                        <button onClick={() => setView('join')} disabled={isProcessing} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
+                    </div>
                 </div>
             </div>
-        </div>
+        </>
     );
 }
 
@@ -802,7 +813,7 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
                                 </div>
                             ))}
                         </div>
-                    ) : <p className="text-sm text-gray-400">Du måste lägga till plagg i garderoben först.</p>}
+                    ) : <p className="text-sm text-gray-400">Nu måste du lägga till plagg i garderoben först.</p>}
                 </div>
                 <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button><button type="submit" disabled={isUploading || !name} className="bg-blue-600 text-white px-4 py-2 rounded font-semibold disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara Outfit'}</button></div>
             </form>
