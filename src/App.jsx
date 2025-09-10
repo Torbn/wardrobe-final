@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
     getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
-    collection, onSnapshot, query, serverTimestamp, where
+    collection, onSnapshot, query, serverTimestamp, where, writeBatch
 } from 'firebase/firestore';
 
 // --- Helper-ikoner (SVG) ---
@@ -238,22 +238,30 @@ function FamilySetup({ user, appData }) {
     const [error, setError] = useState('');
 
     useEffect(() => {
-        const createFamily = async () => {
+        const createFamilyWithBatch = async () => {
             if (!user || !appData.name) return;
+
+            const batch = writeBatch(db);
             const familyId = doc(collection(db, '_')).id;
+
             const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
-            await setDoc(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
             const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
-            await setDoc(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
             const userProfileRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
-            await updateDoc(userProfileRef, { familyId: familyId });
+
+            // Köa upp alla operationer
+            batch.set(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
+            batch.set(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
+            batch.update(userProfileRef, { familyId: familyId });
+
+            // Skicka iväg alla som en enda transaktion
+            await batch.commit();
         };
 
         const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error("Timeout")), 20000) // 20 sekunders timeout
         );
 
-        Promise.race([createFamily(), timeoutPromise])
+        Promise.race([createFamilyWithBatch(), timeoutPromise])
             .catch(e => {
                 console.error("Family creation failed:", e);
                 if (e.message === "Timeout") {
@@ -290,9 +298,7 @@ function ProfileSetup({ onSetup, onJoinRequest }) {
             await actionPromise;
         } catch (e) {
             setError(e.message || 'Något gick fel. Försök igen.');
-        } finally {
-            // Detta block körs oavsett om det lyckades eller misslyckades, men efter att `await` är klar.
-            // I detta flöde kommer komponenten att avmonteras vid lyckat anrop, så detta är mest en säkerhet.
+            // Se till att laddningsskärmen försvinner vid fel
             setIsProcessing(false);
         }
     };
