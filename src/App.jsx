@@ -15,6 +15,7 @@ const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-
 const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
 const ChevronDownIcon = ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>;
+const SendIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>;
 
 
 // --- Firebase Konfiguration ---
@@ -378,6 +379,71 @@ function PendingApprovalScreen() {
     );
 }
 
+// --- Komponent: Chatt-vy ---
+function ChatView({ user, appData }) {
+    const [messages, setMessages] = useState([]);
+    const [newMessage, setNewMessage] = useState('');
+    const messagesEndRef = useRef(null);
+    const messagesPath = `/artifacts/${appId}/public/data/families/${appData.familyId}/messages`;
+
+    useEffect(() => {
+        if (!appData.familyId) return;
+        const q = query(collection(db, messagesPath));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            fetchedMessages.sort((a, b) => a.createdAt?.seconds - b.createdAt?.seconds);
+            setMessages(fetchedMessages);
+        });
+        return unsubscribe;
+    }, [appData.familyId, messagesPath]);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
+
+    const handleSendMessage = async (e) => {
+        e.preventDefault();
+        if (newMessage.trim() === '') return;
+
+        await addDoc(collection(db, messagesPath), {
+            text: newMessage,
+            senderId: user.uid,
+            senderName: appData.name,
+            createdAt: serverTimestamp(),
+        });
+
+        setNewMessage('');
+    };
+
+    return (
+        <div className="flex flex-col h-full">
+            <div className="flex-grow overflow-y-auto p-4 space-y-4">
+                {messages.map(msg => (
+                    <div key={msg.id} className={`flex ${msg.senderId === user.uid ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`p-3 rounded-lg max-w-xs ${msg.senderId === user.uid ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'}`}>
+                            <p className="text-xs font-semibold mb-1">{msg.senderName}</p>
+                            <p>{msg.text}</p>
+                        </div>
+                    </div>
+                ))}
+                <div ref={messagesEndRef} />
+            </div>
+            <form onSubmit={handleSendMessage} className="p-4 bg-white border-t flex items-center gap-2">
+                <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Skriv ett meddelande..."
+                    className="flex-grow p-3 border rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button type="submit" className="bg-blue-500 text-white p-3 rounded-full hover:bg-blue-600 disabled:bg-gray-400" disabled={!newMessage.trim()}>
+                    <SendIcon />
+                </button>
+            </form>
+        </div>
+    );
+}
+
 
 // --- Komponent: Huvudvy för Garderoben ---
 function WardrobeManager({ user, appData }) {
@@ -414,7 +480,7 @@ function WardrobeManager({ user, appData }) {
         switch (currentView) {
             case 'wardrobe': return <WardrobeView owner={currentWardrobeOwner} />;
             case 'outfits': return <OutfitsView owner={currentWardrobeOwner} />;
-            case 'chat': return <p>Chatt är under utveckling.</p>;
+            case 'chat': return <ChatView user={user} appData={appData} />;
             case 'settings': return <SettingsView user={user} appData={appData} members={familyMembers} />;
             default: return null;
         }
@@ -432,11 +498,13 @@ function WardrobeManager({ user, appData }) {
                     </div>
                 )}
             </header>
-            <main className="flex-grow p-4 overflow-y-auto pb-24">{renderContent()}</main>
+            <div className="flex-grow overflow-y-auto">
+                 <main className="p-4 pb-24">{renderContent()}</main>
+            </div>
             <nav className="fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around p-2">
                 <button onClick={() => setCurrentView('wardrobe')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'wardrobe' ? 'text-blue-600' : 'text-gray-500'}`}><HomeIcon /> Plagg</button>
                 <button onClick={() => setCurrentView('outfits')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'outfits' ? 'text-blue-600' : 'text-gray-500'}`}><OutfitIcon /> Outfits</button>
-                <button onClick={() => setCurrentView('chat')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'chat' ? 'text-blue-600' : 'text-gray-500'}`}><ChatIcon /> Chatt</button>
+                {appData.mode === 'family' && <button onClick={() => setCurrentView('chat')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'chat' ? 'text-blue-600' : 'text-gray-500'}`}><ChatIcon /> Chatt</button>}
                 <button onClick={() => setCurrentView('settings')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'settings' ? 'text-blue-600' : 'text-gray-500'}`}><SettingsIcon /> Inställningar</button>
             </nav>
         </div>
