@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, initializeAuth, browserLocalPersistence } from 'firebase/auth';
 import { 
     getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
-    collection, onSnapshot, query, where, serverTimestamp, getDocs
+    collection, onSnapshot, query, serverTimestamp, where, writeBatch
 } from 'firebase/firestore';
 
 // --- Helper-ikoner (SVG) ---
@@ -12,40 +12,72 @@ const OutfitIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 
 const ChatIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>;
 const SettingsIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.096 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
 const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>;
-const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
+const CameraIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>;
+const ChevronDownIcon = ({ className }) => <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>;
+const SendIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>;
 
 
 // --- Firebase Konfiguration ---
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG);
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
 let app;
 let auth;
 let db;
 
-try {
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-} catch (e) {
-    console.error("Firebase initialization error:", e);
-}
+// --- Bildhanteringsfunktion ---
+const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target.result;
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let { width, height } = img;
+            if (width > height) { if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; } }
+            else { if (height > maxHeight) { width *= maxHeight / height; height = maxHeight; } }
+            canvas.width = width; canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = error => reject(error);
+    };
+    reader.onerror = error => reject(error);
+});
+
 
 // --- Generisk modal-komponent ---
-function Modal({ isOpen, onClose, onConfirm, title, children, confirmText = "Bekräfta" }) {
+function Modal({ isOpen, onClose, onConfirm, title, children, confirmText = "Bekräfta", showConfirm = true }) {
     if (!isOpen) return null;
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4">
-            <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4" onClick={onClose}>
+            <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full" onClick={e => e.stopPropagation()}>
                 <h3 className="text-lg font-bold mb-4">{title}</h3>
-                <div className="mb-6">{children}</div>
+                <div className="mb-6 max-h-[70vh] overflow-y-auto">{children}</div>
                 <div className="flex justify-end gap-4">
-                    <button onClick={onClose} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button>
-                    <button onClick={onConfirm} className="bg-red-600 text-white px-4 py-2 rounded font-semibold">{confirmText}</button>
+                    <button onClick={onClose} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">{showConfirm ? "Avbryt" : "Stäng"}</button>
+                    {showConfirm && <button onClick={onConfirm} className="bg-red-600 text-white px-4 py-2 rounded font-semibold">{confirmText}</button>}
                 </div>
             </div>
+        </div>
+    );
+}
+
+// --- Komponent för Skelettladdare ---
+function SkeletonLoader() {
+    return (
+        <div className="flex flex-col h-full animate-pulse">
+            <header className="bg-gray-200 h-16 w-full p-4 mb-4"></header>
+            <main className="flex-grow p-4 space-y-8">
+                <div className="h-8 bg-gray-300 rounded w-1/3"></div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg"></div>
+                    <div className="aspect-[3/4] bg-gray-300 rounded-lg"></div>
+                </div>
+            </main>
+            <nav className="fixed bottom-0 left-0 right-0 bg-gray-200 h-16 border-t"></nav>
         </div>
     );
 }
@@ -54,323 +86,583 @@ function Modal({ isOpen, onClose, onConfirm, title, children, confirmText = "Bek
 export default function App() {
     const [user, setUser] = useState(null);
     const [appData, setAppData] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const [authLoading, setAuthLoading] = useState(true);
+    const [dataLoading, setDataLoading] = useState(true);
     const [error, setError] = useState('');
-
+    const [firebaseReady, setFirebaseReady] = useState(false);
+    const [joinFamilyIdFromUrl, setJoinFamilyIdFromUrl] = useState(null);
+    
     useEffect(() => {
-        if (!auth) {
-            setError("Kunde inte ansluta till databasen. Kontrollera konfigurationen.");
-            setLoading(false);
-            return;
-        }
-        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-            if (currentUser) {
-                setUser(currentUser);
-                const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                const userDocSnap = await getDoc(userDocRef);
+        const params = new URLSearchParams(window.location.search);
+        const familyId = params.get('joinFamily');
+        if (familyId) setJoinFamilyIdFromUrl(familyId);
 
-                if (userDocSnap.exists()) {
-                    setAppData(userDocSnap.data());
-                } else {
-                    setAppData(null);
+        const initFirebase = async () => {
+            try {
+                // Anropar din Cloud Function för att hämta konfigurationen
+                const functionUrl = "https://us-central1-wardrobe-1df3d.cloudfunctions.net/fetchFirebaseConfig";
+
+                const response = await fetch(functionUrl);
+                if (!response.ok) {
+                    throw new Error(`Cloud Function svarade med status: ${response.status}`);
                 }
-            } else {
-                try {
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
+                const fetchedConfig = await response.json();
+
+                if (fetchedConfig && fetchedConfig.apiKey) {
+                    if (!app) {
+                        app = initializeApp(fetchedConfig);
+                        auth = initializeAuth(app, { persistence: browserLocalPersistence });
+                        db = getFirestore(app);
                     }
-                } catch (err) {
-                    console.error("Anonymous sign-in error:", err);
-                    setError("Autentisering misslyckades. Ladda om sidan.");
+                    setFirebaseReady(true);
+                } else {
+                    throw new Error("Mottagen Firebase-konfiguration var ogiltig.");
                 }
+            } catch (e) {
+                console.error("Firebase Init Error:", e);
+                setError(`Kunde inte ansluta till databasen: ${e.message}`);
+                setAuthLoading(false);
             }
-            setLoading(false);
-        });
-
-        return () => unsubscribe();
+        };
+        
+        initFirebase();
     }, []);
 
-    const handleProfileSetup = async (name, mode, familyIdToJoin = null) => {
-        if (!user) return;
-        setLoading(true);
-        try {
-            let familyId = familyIdToJoin;
-            let role = 'member';
-            if (mode === 'family' && !familyId) {
-                familyId = crypto.randomUUID().split('-')[0];
-                const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
-                await setDoc(familyDocRef, { createdAt: serverTimestamp(), owner: user.uid });
-                role = 'admin'; // First user is admin
+    useEffect(() => {
+        if (!firebaseReady) return;
+        
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            if (currentUser) {
+                setUser(currentUser);
+                setAuthLoading(false);
+
+                const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
+                const unsubscribeSnapshot = onSnapshot(userDocRef, (userDocSnap) => {
+                    setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
+                    setDataLoading(false);
+                }, (err) => {
+                    setError("Kunde inte hämta profildata.");
+                    setDataLoading(false);
+                });
+                return unsubscribeSnapshot;
+            } else {
+                signInAnonymously(auth).catch((err) => {
+                    setError("Autentisering misslyckades.");
+                    setAuthLoading(false);
+                });
             }
+        });
+        return () => unsubscribe();
+    }, [firebaseReady]);
 
-            const userProfile = { name, mode, familyId: mode === 'family' ? familyId : null };
-            await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), userProfile);
-
-            if (mode === 'family') {
-                const memberDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}/members/${user.uid}`);
-                await setDoc(memberDocRef, { name, joinedAt: serverTimestamp(), role, isPrivate: false });
-            }
-
-            setAppData(userProfile);
-        } catch (e) {
-            console.error("Profile setup error: ", e);
-            setError("Kunde inte skapa profilen. Försök igen.");
-        }
-        setLoading(false);
+    const handleProfileSetup = async (name, mode) => {
+        if (!user) throw new Error("Användare inte inloggad.");
+        const userProfile = { name, mode, familyId: null };
+        await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), userProfile);
     };
 
-    if (loading) return <div className="flex items-center justify-center h-screen bg-gray-100"><div className="text-xl font-semibold">Laddar garderoben...</div></div>;
+    const handleJoinRequest = async (name, familyId) => {
+        if (!user || !db) throw new Error("Användare eller databas är inte redo.");
+        try {
+            const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
+            const familyDoc = await getDoc(familyDocRef);
+            if (!familyDoc.exists()) throw new Error("Familjekoden är ogiltig.");
+            
+            const joinRequestRef = doc(collection(db, `/artifacts/${appId}/public/data/joinRequests`));
+            await setDoc(joinRequestRef, { familyId, requesterId: user.uid, requesterName: name, status: 'pending' });
+            await setDoc(doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`), { name, mode: 'family', status: 'pending', requestedFamilyId: familyId });
+        } catch (e) {
+            if (e.code === 'unavailable' || e.message.includes('offline')) {
+                throw new Error("Kunde inte ansluta. Kontrollera din internetanslutning.");
+            }
+            throw e;
+        }
+    }
+    
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
+    
+    if (authLoading) return <SkeletonLoader />;
 
-    return (
-        <div className="h-screen w-screen bg-gray-100 antialiased">
-            {user && !appData ? <ProfileSetup onSetup={handleProfileSetup} /> : user && appData ? <WardrobeManager user={user} appData={appData} /> : <div className="flex items-center justify-center h-screen">Loggar in...</div>}
-        </div>
-    );
+    const renderContent = () => {
+        if (dataLoading && user) return <SkeletonLoader />;
+        
+        if (user && appData) {
+            if (appData.mode === 'family' && !appData.familyId) {
+                 if (appData.status === 'pending') return <PendingApprovalScreen />;
+                 return <FamilySetup user={user} appData={appData} />;
+            }
+            if (appData.status === 'pending') return <PendingApprovalScreen />;
+            return <WardrobeManager user={user} appData={appData} />;
+        }
+        if (user && !appData) {
+            return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
+        }
+        return <SkeletonLoader />;
+    };
+
+    return <div className="h-screen w-screen bg-gray-100 antialiased">{renderContent()}</div>
+}
+
+// --- Komponent: Slutför skapande av familj ---
+function FamilySetup({ user, appData }) {
+    const [error, setError] = useState('');
+    useEffect(() => {
+        const createFamilyWithBatch = async () => {
+            if (!user || !appData.name) return;
+            const batch = writeBatch(db);
+            const familyId = doc(collection(db, '_')).id;
+            const familyDocRef = doc(db, `/artifacts/${appId}/public/data/families/${familyId}`);
+            const membershipDocRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
+            const userProfileRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
+            batch.set(familyDocRef, { owner: user.uid, name: `${appData.name}s familj`, createdAt: serverTimestamp() });
+            batch.set(membershipDocRef, { userId: user.uid, familyId, name: appData.name, role: 'admin', isPrivate: false });
+            batch.update(userProfileRef, { familyId: familyId });
+            await batch.commit();
+        };
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 20000));
+        Promise.race([createFamilyWithBatch(), timeoutPromise]).catch(e => {
+            if (e.message === "Timeout") setError("Konfigureringen tog för lång tid.");
+            else setError("Kunde inte skapa familjen.");
+        });
+    }, [user, appData]);
+    if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><p>{error}</p></div>;
+    return <div className="fixed inset-0 bg-white z-50 flex justify-center items-center"><p>Slutför konfiguration av familj...</p></div>;
 }
 
 // --- Komponent: Profil-setup ---
-function ProfileSetup({ onSetup }) {
+function ProfileSetup({ onSetup, onJoinRequest, joinFamilyIdFromUrl }) {
     const [name, setName] = useState('');
     const [joinFamilyId, setJoinFamilyId] = useState('');
     const [view, setView] = useState('main');
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [error, setError] = useState('');
+    const [processingMessage, setProcessingMessage] = useState('');
+
+    useEffect(() => {
+        if (joinFamilyIdFromUrl) {
+            setJoinFamilyId(joinFamilyIdFromUrl);
+            setView('join');
+        }
+    }, [joinFamilyIdFromUrl]);
+
+    const handleAction = async (actionPromise, message) => {
+        setIsProcessing(true);
+        setError('');
+        setProcessingMessage(message);
+        try {
+            await actionPromise;
+        } catch (e) {
+            setError(e.message || 'Något gick fel. Försök igen.');
+            setIsProcessing(false);
+        }
+    };
 
     if (view === 'join') {
         return (
-            <div className="flex items-center justify-center h-screen bg-gray-100">
-                <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
-                    <h2 className="text-2xl font-bold mb-4">Gå med i familj</h2>
-                    <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ditt namn" className="w-full p-2 border rounded mb-4" />
-                    <input type="text" value={joinFamilyId} onChange={e => setJoinFamilyId(e.target.value)} placeholder="Familjekod" className="w-full p-2 border rounded mb-4" />
-                    <button onClick={() => onSetup(name, 'family', joinFamilyId)} disabled={!name || !joinFamilyId} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-300">Gå med</button>
-                    <button onClick={() => setView('main')} className="mt-4 text-sm text-gray-600">Tillbaka</button>
+            <>
+                {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">{processingMessage}</div></div>}
+                <div className="flex items-center justify-center h-screen">
+                    <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
+                        <h2 className="text-2xl font-bold mb-4">Gå med i familj</h2>
+                        {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+                        <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ditt namn" className="w-full p-2 border rounded mb-4" />
+                        <input type="text" value={joinFamilyId} onChange={e => setJoinFamilyId(e.target.value)} placeholder="Familjekod" className="w-full p-2 border rounded mb-4" />
+                        <button onClick={() => handleAction(onJoinRequest(name, joinFamilyId), 'Skickar förfrågan...')} disabled={!name || !joinFamilyId || isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                            Skicka förfrågan
+                        </button>
+                        <button onClick={() => setView('main')} className="mt-4 text-sm text-gray-600">Tillbaka</button>
+                    </div>
                 </div>
-            </div>
+            </>
         );
     }
 
     return (
-        <div className="flex items-center justify-center h-screen bg-gray-100">
-            <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
-                <h1 className="text-3xl font-bold mb-2">Välkommen!</h1>
-                <p className="text-gray-600 mb-6">Hur vill du använda appen?</p>
-                <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ange ditt namn" className="w-full p-3 border rounded-lg mb-4 text-center" />
-                <div className="space-y-3">
-                    <button onClick={() => onSetup(name, 'personal')} disabled={!name} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-300">Bara för mig</button>
-                    <button onClick={() => onSetup(name, 'family')} disabled={!name} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-300">Skapa en familj</button>
-                    <button onClick={() => setView('join')} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
+        <>
+            {isProcessing && <div className="fixed inset-0 bg-white bg-opacity-90 z-50 flex justify-center items-center"><div className="text-xl font-semibold animate-pulse">{processingMessage}</div></div>}
+            <div className="flex items-center justify-center h-screen">
+                <div className="bg-white p-8 rounded-lg shadow-xl max-w-sm w-full text-center">
+                    <h1 className="text-3xl font-bold mb-2">Välkommen!</h1>
+                    <p className="text-gray-600 mb-6">Hur vill du använda appen?</p>
+                    {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+                    <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ange ditt namn" className="w-full p-3 border rounded-lg mb-4 text-center" />
+                    <div className="space-y-3">
+                        <button onClick={() => handleAction(onSetup(name, 'personal'), 'Konfigurerar din garderob...')} disabled={!name || isProcessing} className="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 disabled:bg-gray-400">
+                            Bara för mig
+                        </button>
+                        <button onClick={() => handleAction(onSetup(name, 'family'), 'Konfigurerar din garderob...')} disabled={!name || isProcessing} className="w-full bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600 disabled:bg-gray-400">
+                            Skapa en familj
+                        </button>
+                        <button onClick={() => setView('join')} disabled={isProcessing} className="w-full bg-gray-200 text-gray-800 p-3 rounded-lg font-semibold hover:bg-gray-300">Gå med i familj</button>
+                    </div>
                 </div>
             </div>
+        </>
+    );
+}
+
+// --- Komponent: Väntar på godkännande ---
+function PendingApprovalScreen() {
+    return (
+        <div className="flex flex-col items-center justify-center h-screen bg-gray-100 p-4 text-center">
+            <h2 className="text-2xl font-bold mb-4">Förfrågan skickad</h2>
+            <p className="text-gray-600">Väntar på att en administratör för familjen ska godkänna din förfrågan.</p>
         </div>
     );
 }
 
+// --- Komponent: Chatt-vy ---
+function ChatView({ user, appData, familyId }) {
+    const [messages, setMessages] = useState([]);
+    const [newMessage, setNewMessage] = useState('');
+    const messagesEndRef = useRef(null);
+    const messagesPath = `/artifacts/${appId}/public/data/families/${familyId}/messages`;
+
+    useEffect(() => {
+        if (!familyId) return;
+        const q = query(collection(db, messagesPath));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            fetchedMessages.sort((a, b) => a.createdAt?.seconds - b.createdAt?.seconds);
+            setMessages(fetchedMessages);
+        });
+        return unsubscribe;
+    }, [familyId, messagesPath]);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
+
+    const handleSendMessage = async (e) => {
+        e.preventDefault();
+        if (newMessage.trim() === '') return;
+
+        await addDoc(collection(db, messagesPath), {
+            text: newMessage,
+            senderId: user.uid,
+            senderName: appData.name,
+            createdAt: serverTimestamp(),
+        });
+
+        setNewMessage('');
+    };
+
+    return (
+        <div className="flex flex-col h-full">
+            <div className="flex-grow overflow-y-auto p-4 space-y-4">
+                {messages.map(msg => (
+                    <div key={msg.id} className={`flex ${msg.senderId === user.uid ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`p-3 rounded-lg max-w-xs ${msg.senderId === user.uid ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'}`}>
+                            <p className="text-xs font-semibold mb-1">{msg.senderName}</p>
+                            <p>{msg.text}</p>
+                        </div>
+                    </div>
+                ))}
+                <div ref={messagesEndRef} />
+            </div>
+            <form onSubmit={handleSendMessage} className="p-4 bg-white border-t flex items-center gap-2">
+                <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Skriv ett meddelande..."
+                    className="flex-grow p-3 border rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button type="submit" className="bg-blue-500 text-white p-3 rounded-full hover:bg-blue-600 disabled:bg-gray-400" disabled={!newMessage.trim()}>
+                    <SendIcon />
+                </button>
+            </form>
+        </div>
+    );
+}
+
+
 // --- Komponent: Huvudvy för Garderoben ---
 function WardrobeManager({ user, appData }) {
     const [currentView, setCurrentView] = useState('wardrobe');
-    const [currentWardrobeOwner, setCurrentWardrobeOwner] = useState({ id: user.uid, name: appData.name, type: 'full' });
     const [familyMembers, setFamilyMembers] = useState([]);
-    const [managedMembers, setManagedMembers] = useState([]);
-    const [currentUserRole, setCurrentUserRole] = useState('member');
+    const [currentWardrobeOwner, setCurrentWardrobeOwner] = useState({ id: user.uid, name: appData.name });
 
     useEffect(() => {
-        if (appData.mode === 'family') {
-            const membersColRef = collection(db, `/artifacts/${appId}/public/data/families/${appData.familyId}/members`);
-            const unsubMembers = onSnapshot(membersColRef, (snapshot) => {
-                const members = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'full' }));
-                setFamilyMembers(members);
-                const currentUserData = members.find(m => m.id === user.uid);
-                if (currentUserData) setCurrentUserRole(currentUserData.role);
+        if (appData.mode === 'family' && appData.familyId) {
+            const membershipsQuery = query(collection(db, `/artifacts/${appId}/public/data/memberships`), where("familyId", "==", appData.familyId));
+            const unsubscribe = onSnapshot(membershipsQuery, (snapshot) => {
+                const membersList = snapshot.docs.map(doc => ({ id: doc.data().userId, docId: doc.id, ...doc.data() }));
+                setFamilyMembers(membersList);
             });
-
-            const managedMembersColRef = collection(db, `/artifacts/${appId}/public/data/families/${appData.familyId}/managed_members`);
-            const unsubManaged = onSnapshot(managedMembersColRef, (snapshot) => {
-                const members = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), type: 'managed' }));
-                setManagedMembers(members);
-            });
-            return () => { unsubMembers(); unsubManaged(); };
+            return unsubscribe;
+        } else {
+             setFamilyMembers([{ id: user.uid, name: appData.name }]);
         }
-    }, [appData.familyId, appData.mode, user.uid]);
-    
+    }, [appData.familyId, appData.mode, user.uid, appData.name]);
+     
     const visibleMembers = useMemo(() => {
-        const visibleFullMembers = familyMembers.filter(m => m.id === user.uid || !m.isPrivate);
-        return [...visibleFullMembers, ...managedMembers];
-    }, [familyMembers, managedMembers, user.uid]);
-
-    const basePath = useMemo(() => {
-        if (appData.mode === 'family') return `/artifacts/${appId}/public/data/families/${appData.familyId}`;
-        return `/artifacts/${appId}/users/${user.uid}`;
-    }, [user.uid, appData]);
+        if (appData.mode !== 'family') return [{ id: user.uid, name: appData.name }];
+        return familyMembers.filter(m => m.id === user.uid || !m.isPrivate);
+    }, [familyMembers, user.uid, appData]);
+     
+    useEffect(() => {
+        const self = familyMembers.find(m => m.id === user.uid) || { id: user.uid, name: appData.name };
+        setCurrentWardrobeOwner(self);
+    }, [familyMembers, user.uid, appData.name]);
 
     const renderContent = () => {
         switch (currentView) {
-            case 'wardrobe': return <WardrobeView basePath={basePath} owner={currentWardrobeOwner} />;
-            case 'outfits': return <OutfitsView basePath={basePath} owner={currentWardrobeOwner} />;
-            case 'chat': return appData.mode === 'family' ? <ChatView basePath={basePath} user={user} appData={appData} /> : <p>Chatt är endast för familjeläge.</p>;
-            case 'settings': return appData.mode === 'family' ? <SettingsView basePath={basePath} user={user} role={currentUserRole} members={familyMembers} managedMembers={managedMembers} /> : <p>Inställningar är endast för familjeläge.</p>
+            case 'wardrobe': return <WardrobeView owner={currentWardrobeOwner} />;
+            case 'outfits': return <OutfitsView owner={currentWardrobeOwner} />;
+            case 'chat': return <ChatView user={user} appData={appData} familyId={appData.familyId} />;
+            case 'settings': return <SettingsView user={user} appData={appData} members={familyMembers} />;
             default: return null;
         }
     };
-    
+     
     return (
         <div className="flex flex-col h-full">
             <header className="bg-white shadow-md p-4 flex flex-col sm:flex-row justify-between items-center gap-4">
                 <h1 className="text-xl font-bold text-center sm:text-left">{currentWardrobeOwner.name}'s Garderob</h1>
                 {appData.mode === 'family' && (
                     <div className="flex items-center gap-4">
-                        <select value={currentWardrobeOwner.id} onChange={e => { const selected = visibleMembers.find(m => m.id === e.target.value); setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
-                            <optgroup label="Familjemedlemmar">
-                                {visibleMembers.filter(m => m.type === 'full').map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
-                            </optgroup>
-                            {managedMembers.length > 0 && <optgroup label="Barn">
-                                {visibleMembers.filter(m => m.type === 'managed').map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
-                            </optgroup>}
+                        <select value={currentWardrobeOwner.id} onChange={e => { const selected = familyMembers.find(m => m.id === e.target.value); if(selected) setCurrentWardrobeOwner(selected); }} className="p-2 border rounded-md">
+                           {visibleMembers.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
                         </select>
                     </div>
                 )}
             </header>
-            <main className="flex-grow p-4 overflow-y-auto pb-24">{renderContent()}</main>
+            <div className="flex-grow overflow-y-auto">
+                 <main className="p-4 pb-24">{renderContent()}</main>
+            </div>
             <nav className="fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around p-2">
                 <button onClick={() => setCurrentView('wardrobe')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'wardrobe' ? 'text-blue-600' : 'text-gray-500'}`}><HomeIcon /> Plagg</button>
                 <button onClick={() => setCurrentView('outfits')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'outfits' ? 'text-blue-600' : 'text-gray-500'}`}><OutfitIcon /> Outfits</button>
                 {appData.mode === 'family' && <button onClick={() => setCurrentView('chat')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'chat' ? 'text-blue-600' : 'text-gray-500'}`}><ChatIcon /> Chatt</button>}
-                {appData.mode === 'family' && <button onClick={() => setCurrentView('settings')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'settings' ? 'text-blue-600' : 'text-gray-500'}`}><SettingsIcon /> Inställningar</button>}
+                <button onClick={() => setCurrentView('settings')} className={`flex flex-col items-center w-20 text-center text-xs sm:text-sm ${currentView === 'settings' ? 'text-blue-600' : 'text-gray-500'}`}><SettingsIcon /> Inställningar</button>
             </nav>
         </div>
     );
 }
-// --- Komponent: Inställningar ---
-function SettingsView({ basePath, user, role, members, managedMembers }) {
-    const [newChildName, setNewChildName] = useState('');
-    const currentUserData = members.find(m => m.id === user.uid);
-    const familyId = basePath.split('/').pop();
 
-    const handlePrivacyToggle = async (e) => {
-        const isPrivate = e.target.checked;
-        const memberDocRef = doc(db, `${basePath}/members/${user.uid}`);
-        await updateDoc(memberDocRef, { isPrivate });
+// --- Komponent: Inställningar ---
+function SettingsView({ user, appData, members = [] }) {
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [joinRequests, setJoinRequests] = useState([]);
+    const [newMemberName, setNewMemberName] = useState('');
+    const [isAddingMember, setIsAddingMember] = useState(false);
+    const currentUserData = members.find(m => m.id === user.uid);
+    const role = currentUserData?.role;
+
+    useEffect(() => {
+        if (role === 'admin' && appData.familyId) {
+            const requestsQuery = query(collection(db, `/artifacts/${appId}/public/data/joinRequests`), where("familyId", "==", appData.familyId), where("status", "==", "pending"));
+            const unsubscribe = onSnapshot(requestsQuery, (snapshot) => {
+                setJoinRequests(snapshot.docs.map(d => ({ docId: d.id, ...d.data() })));
+            });
+            return unsubscribe;
+        }
+    }, [role, appData.familyId]);
+    
+    const handleShareInvite = async () => {
+        const inviteLink = `${window.location.origin}${window.location.pathname}?joinFamily=${appData.familyId}`;
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: 'Inbjudan till familjegarderob',
+                    text: `Gå med i ${appData.name}s familjegarderob!`,
+                    url: inviteLink,
+                });
+            } catch (error) {
+                console.error('Error sharing:', error);
+            }
+        } else {
+            navigator.clipboard.writeText(inviteLink);
+            alert("Inbjudningslänk kopierad till urklipp!");
+        }
     };
     
-    const handleAddChild = async (e) => {
-        e.preventDefault();
-        if (newChildName.trim() === '') return;
-        const managedMemberId = crypto.randomUUID();
-        const managedMemberRef = doc(db, `${basePath}/managed_members/${managedMemberId}`);
-        await setDoc(managedMemberRef, { name: newChildName });
-        setNewChildName('');
+    const handleAddVirtualMember = async () => {
+        if (!newMemberName.trim() || !appData.familyId) return;
+        setIsAddingMember(true);
+        try {
+            const virtualMemberId = doc(collection(db, '_')).id;
+            const membershipDocRef = doc(db, `/artifacts/${appId}/public/data/memberships/${virtualMemberId}`);
+            await setDoc(membershipDocRef, {
+                userId: virtualMemberId,
+                familyId: appData.familyId,
+                name: newMemberName,
+                role: 'virtual',
+                isPrivate: false,
+                isVirtual: true,
+            });
+            setNewMemberName('');
+        } catch (e) {
+            console.error("Error adding virtual member:", e);
+            alert("Kunde inte lägga till medlemmen.");
+        } finally {
+            setIsAddingMember(false);
+        }
     };
 
-    const handleDeleteManagedMember = async (memberId) => {
-         const managedMemberRef = doc(db, `${basePath}/managed_members/${memberId}`);
-         await deleteDoc(managedMemberRef);
-         // OBS: Detta raderar inte garderoben. En mer avancerad lösning behövs för det.
+
+    const handlePrivacyToggle = async (e) => {
+        if (!currentUserData?.docId) return;
+        const memberDocRef = doc(db, `/artifacts/${appId}/public/data/memberships/${currentUserData.docId}`);
+        await updateDoc(memberDocRef, { isPrivate: e.target.checked });
+    };
+
+    const handleApproveRequest = async (request) => {
+        const membershipRef = doc(collection(db, `/artifacts/${appId}/public/data/memberships`));
+        await setDoc(membershipRef, {
+            userId: request.requesterId, familyId: request.familyId, name: request.requesterName, role: 'member', isPrivate: false,
+        });
+        const userProfileRef = doc(db, `/artifacts/${appId}/users/${request.requesterId}/profile/main`);
+        await updateDoc(userProfileRef, { status: 'approved', familyId: request.familyId });
+        await deleteDoc(doc(db, `/artifacts/${appId}/public/data/joinRequests/${request.docId}`));
+    };
+
+    const handleDenyRequest = async (request) => {
+        await deleteDoc(doc(db, `/artifacts/${appId}/public/data/joinRequests/${request.docId}`));
+        const userProfileRef = doc(db, `/artifacts/${appId}/users/${request.requesterId}/profile/main`);
+        await updateDoc(userProfileRef, { status: 'denied', requestedFamilyId: null });
+    };
+
+    const handleDeleteProfile = async () => {
+        const profileDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
+        await deleteDoc(profileDocRef);
+        setShowDeleteModal(false);
     };
 
     return (
-        <div className="max-w-xl mx-auto space-y-8">
-            <div className="bg-white p-6 rounded-lg shadow">
-                <h2 className="text-xl font-bold mb-4">Mina Inställningar</h2>
-                <div className="flex items-center justify-between">
-                    <label htmlFor="privacy" className="font-semibold">Håll min garderob privat</label>
-                    <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                        <input type="checkbox" name="privacy" id="privacy" checked={currentUserData?.isPrivate || false} onChange={handlePrivacyToggle} className="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer"/>
-                        <label htmlFor="privacy" className="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+        <>
+            <Modal isOpen={showDeleteModal} onClose={() => setShowDeleteModal(false)} onConfirm={handleDeleteProfile} title="Radera profil" confirmText="Ja, radera">
+                <p>Är du säker på att du vill radera din profil? All din data kommer att försvinna.</p>
+            </Modal>
+            <div className="max-w-xl mx-auto space-y-8">
+                {appData.mode === 'family' && role === 'admin' && (
+                    <div className="bg-white p-6 rounded-lg shadow">
+                        <h2 className="text-xl font-bold mb-4">Familjeadministration</h2>
+                        <div className="mb-6">
+                            <h3 className="font-semibold mb-2">Anslutningsförfrågningar</h3>
+                            {joinRequests.length > 0 ? (
+                                <ul className="space-y-2">{joinRequests.map(req => (
+                                    <li key={req.docId} className="flex justify-between items-center bg-gray-50 p-2 rounded">
+                                        <span>{req.requesterName} vill gå med</span>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => handleApproveRequest(req)} className="bg-green-500 text-white px-3 py-1 text-sm rounded">Godkänn</button>
+                                            <button onClick={() => handleDenyRequest(req)} className="bg-red-500 text-white px-3 py-1 text-sm rounded">Neka</button>
+                                        </div>
+                                    </li>
+                                ))}</ul>
+                            ) : <p className="text-sm text-gray-500">Inga nya förfrågningar.</p>}
+                        </div>
+                        <div>
+                            <h3 className="font-semibold mb-2">Bjud in nya medlemmar</h3>
+                            <p className="text-sm text-gray-600 mb-2">Dela familjekoden nedan eller skicka en inbjudningslänk.</p>
+                            <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{appData.familyId.substring(0, 4).toUpperCase()}</p>
+                            <button onClick={handleShareInvite} className="w-full mt-2 bg-blue-500 text-white p-3 rounded-lg font-semibold hover:bg-blue-600">
+                                Bjud in med länk
+                            </button>
+                        </div>
+                         <div>
+                            <h3 className="font-semibold mt-6 mb-2">Lägg till familjemedlem (utan konto)</h3>
+                            <p className="text-sm text-gray-600 mb-2">För barn eller andra som inte har en egen telefon.</p>
+                            <div className="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    value={newMemberName} 
+                                    onChange={(e) => setNewMemberName(e.target.value)}
+                                    placeholder="Barnets namn"
+                                    className="flex-grow p-2 border rounded"
+                                />
+                                <button 
+                                    onClick={handleAddVirtualMember}
+                                    disabled={!newMemberName.trim() || isAddingMember}
+                                    className="bg-green-500 text-white px-4 py-2 text-sm rounded disabled:bg-gray-300"
+                                >
+                                    {isAddingMember ? 'Lägger till...' : 'Lägg till'}
+                                </button>
+                            </div>
+                        </div>
                     </div>
+                )}
+                 <div className="bg-white p-6 rounded-lg shadow">
+                     <h2 className="text-xl font-bold mb-4">Inställningar</h2>
+                      {appData.mode === 'family' && (
+                        <div className="flex items-center justify-between mb-4">
+                            <label htmlFor="privacy" className="font-semibold">Håll min garderob privat</label>
+                            <input type="checkbox" name="privacy" id="privacy" checked={currentUserData?.isPrivate || false} onChange={handlePrivacyToggle} />
+                        </div>
+                      )}
+                     <p className="text-sm text-gray-600 mb-4">Vill du börja om? Radera din profil här.</p>
+                     <button onClick={() => setShowDeleteModal(true)} className="w-full bg-red-500 text-white p-3 rounded-lg font-semibold hover:bg-red-600">
+                        Radera min profil och börja om
+                     </button>
                 </div>
-                <p className="text-sm text-gray-500 mt-2">När din garderob är privat kan andra familjemedlemmar inte se dina plagg eller outfits.</p>
             </div>
-            
-            {role === 'admin' && (
-                <div className="bg-white p-6 rounded-lg shadow">
-                    <h2 className="text-xl font-bold mb-4">Familjeadministration</h2>
-                    <div className="mb-6">
-                        <h3 className="font-semibold mb-2">Bjud in nya medlemmar</h3>
-                        <p className="text-sm text-gray-600">Dela familjekoden nedan med en annan vuxen för att de ska kunna gå med.</p>
-                        <p className="text-center font-mono text-2xl bg-gray-100 p-3 my-2 rounded-lg">{familyId}</p>
-                    </div>
-                    <div>
-                        <h3 className="font-semibold mb-2">Hantera barnkonton</h3>
-                        <form onSubmit={handleAddChild} className="flex gap-2 mb-4">
-                            <input type="text" value={newChildName} onChange={e => setNewChildName(e.target.value)} placeholder="Barnets namn" className="flex-grow p-2 border rounded" />
-                            <button type="submit" className="bg-blue-500 text-white px-4 py-2 rounded font-semibold hover:bg-blue-600">Lägg till</button>
-                        </form>
-                        <ul className="space-y-2">
-                           {managedMembers.map(child => (
-                               <li key={child.id} className="flex justify-between items-center bg-gray-50 p-2 rounded">
-                                   <span>{child.name}</span>
-                                   <button onClick={() => handleDeleteManagedMember(child.id)} className="text-red-500 hover:text-red-700"><TrashIcon /></button>
-                               </li>
-                           ))}
-                        </ul>
-                    </div>
-                </div>
-            )}
-            <style>{`.toggle-checkbox:checked { right: 0; border-color: #48bb78; } .toggle-checkbox:checked + .toggle-label { background-color: #48bb78; }`}</style>
-        </div>
+        </>
     );
 }
 
 
 // --- Komponent: Plagg-vyn ---
-function WardrobeView({ basePath, owner }) {
+function WardrobeView({ owner }) {
     const [garments, setGarments] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [garmentToDelete, setGarmentToDelete] = useState(null);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [expandedCategories, setExpandedCategories] = useState({});
+    const garmentsPath = owner.isVirtual 
+        ? `/artifacts/${appId}/public/data/memberships/${owner.docId}/garments` 
+        : `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
-        // Path logic works for both full and managed members
-        const garmentsPath = `${basePath}/wardrobes/${owner.id}/garments`;
+        if (!owner || !db) return;
         const q = query(collection(db, garmentsPath));
         const unsubscribe = onSnapshot(q, snapshot => setGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
-        return () => unsubscribe();
-    }, [basePath, owner.id]);
+        return unsubscribe;
+    }, [garmentsPath, owner]);
 
     const addGarment = async (garmentData) => {
-        const garmentsPath = `${basePath}/wardrobes/${owner.id}/garments`;
         await addDoc(collection(db, garmentsPath), { ...garmentData, createdAt: serverTimestamp() });
-        setShowAddForm(false);
     };
 
     const confirmDelete = async () => {
         if (garmentToDelete) {
-            const garmentPath = `${basePath}/wardrobes/${owner.id}/garments/${garmentToDelete.id}`;
-            await deleteDoc(doc(db, garmentPath));
+            await deleteDoc(doc(db, garmentsPath, garmentToDelete.id));
             setGarmentToDelete(null);
         }
     };
     
-    const groupedGarments = garments.reduce((acc, garment) => {
+    const filteredGarments = useMemo(() => {
+        if (!searchTerm) return garments;
+        return garments.filter(g =>
+            g.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            g.category?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            g.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            g.notes?.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+    }, [garments, searchTerm]);
+     
+    const groupedGarments = filteredGarments.reduce((acc, garment) => {
         const category = garment.category || 'Övrigt';
-        if (!acc[category]) {
-            acc[category] = [];
-        }
+        if (!acc[category]) acc[category] = [];
         acc[category].push(garment);
         return acc;
     }, {});
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
-    const sortedCategories = categories.filter(cat => groupedGarments[cat]);
-
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
+    const sortedCategories = categories.filter(cat => groupedGarments[cat]).concat(Object.keys(groupedGarments).filter(cat => !categories.includes(cat)));
+    
+    const toggleCategory = (category) => setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
+    const expandAll = () => setExpandedCategories(sortedCategories.reduce((acc, cat) => ({...acc, [cat]: true}), {}));
+    const collapseAll = () => setExpandedCategories({});
 
     return (
         <div>
             <Modal isOpen={!!garmentToDelete} onClose={() => setGarmentToDelete(null)} onConfirm={confirmDelete} title="Ta bort plagg"><p>Är du säker på att du vill ta bort plagget "{garmentToDelete?.name}"?</p></Modal>
             {showAddForm ? <AddGarmentForm onAdd={addGarment} onCancel={() => setShowAddForm(false)} /> : (
                 <>
-                    {sortedCategories.length > 0 ? (
-                        sortedCategories.map(category => (
-                            <div key={category} className="mb-8">
-                                <h2 className="text-2xl font-bold border-b pb-2 mb-4">{category}</h2>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                    {groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}
-                                </div>
-                            </div>
-                        ))
-                    ) : (
-                        <p className="text-center text-gray-500 mt-8">Inga plagg än. Klicka på plus-knappen för att lägga till!</p>
-                    )}
+                    <div className="mb-4"><input type="search" placeholder="Sök i garderoben..." className="w-full p-3 border-gray-300 border rounded-lg shadow-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
+                    <div className="flex gap-2 mb-6"><button onClick={expandAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Expandera alla</button><button onClick={collapseAll} className="flex-1 bg-gray-200 text-gray-800 px-3 py-2 text-sm rounded font-semibold hover:bg-gray-300">Kollapsa alla</button></div>
+                    {garments.length > 0 ? (filteredGarments.length > 0 ? (sortedCategories.map(category => (groupedGarments[category] && <div key={category} className="mb-2"><button onClick={() => toggleCategory(category)} className="w-full text-left bg-gray-50 hover:bg-gray-100 p-3 rounded-t-lg border-b"><h2 className="text-xl font-normal flex justify-between items-center w-full"><span>{category} ({groupedGarments[category].length})</span><ChevronDownIcon className={`h-5 w-5 text-gray-400 transform transition-transform ${expandedCategories[category] ? 'rotate-180' : ''}`} /></h2></button>{expandedCategories[category] && (<div className="p-4 bg-white rounded-b-lg shadow-inner"><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">{groupedGarments[category].map(g => <GarmentCard key={g.id} garment={g} onDelete={() => setGarmentToDelete(g)} />)}</div></div>)}</div>))) : (<p className="text-center text-gray-500 mt-8">Inga plagg matchade din sökning.</p>)) : (<p className="text-center text-gray-500 mt-8">Inga plagg än. Klicka på plus-knappen.</p>)}
                     <button onClick={() => setShowAddForm(true)} className="fixed bottom-20 right-5 bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700"><PlusIcon /></button>
                 </>
             )}
@@ -378,77 +670,81 @@ function WardrobeView({ basePath, owner }) {
     );
 }
 
+// --- Komponent: Detaljvy för plagg ---
+function GarmentDetailView({ garment }) {
+    if (!garment) return null;
+    return (
+        <div className="space-y-3">
+            <img src={garment.imageUrl || 'https://placehold.co/300x400/eeeeee/cccccc?text=Inget+foto'} alt={garment.name} className="w-full aspect-[3/4] object-cover rounded-lg shadow-sm" />
+            <div>
+                <h3 className="text-2xl font-bold">{garment.name}</h3>
+                <p className="text-md text-gray-600"><strong>Kategori:</strong> {garment.category}</p>
+                <p className="text-md text-gray-600"><strong>Storlek:</strong> {garment.size || 'N/A'}</p>
+                <p className="text-md text-gray-600"><strong>Plats:</strong> {garment.location || 'N/A'}</p>
+                {garment.notes && <p className="text-md text-gray-600 mt-2 italic">"{garment.notes}"</p>}
+            </div>
+        </div>
+    );
+}
+
+
 // --- Komponent: Outfit-vyn ---
-function OutfitsView({ basePath, owner }) {
+function OutfitsView({ owner }) {
     const [outfits, setOutfits] = useState([]);
     const [showAddForm, setShowAddForm] = useState(false);
     const [availableGarments, setAvailableGarments] = useState([]);
     const [outfitToDelete, setOutfitToDelete] = useState(null);
+    const [viewingGarment, setViewingGarment] = useState(null);
+    const outfitsPath = owner.isVirtual ? `/artifacts/${appId}/public/data/memberships/${owner.docId}/outfits` : `/artifacts/${appId}/users/${owner.id}/outfits`;
+    const garmentsPath = owner.isVirtual ? `/artifacts/${appId}/public/data/memberships/${owner.docId}/garments` : `/artifacts/${appId}/users/${owner.id}/garments`;
 
     useEffect(() => {
-        const garmentsPath = `${basePath}/wardrobes/${owner.id}/garments`;
+        if (!owner || !db) return;
         const unsubGarments = onSnapshot(query(collection(db, garmentsPath)), snapshot => setAvailableGarments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
-        const outfitsPath = `${basePath}/wardrobes/${owner.id}/outfits`;
         const unsubOutfits = onSnapshot(query(collection(db, outfitsPath)), snapshot => setOutfits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
         return () => { unsubGarments(); unsubOutfits(); };
-    }, [basePath, owner.id]);
+    }, [garmentsPath, outfitsPath, owner]);
 
     const addOutfit = async (outfitData) => {
-        const outfitsPath = `${basePath}/wardrobes/${owner.id}/outfits`;
         await addDoc(collection(db, outfitsPath), { ...outfitData, createdAt: serverTimestamp() });
-        setShowAddForm(false);
     };
 
     const confirmDelete = async () => {
         if (outfitToDelete) {
-            const outfitPath = `${basePath}/wardrobes/${owner.id}/outfits/${outfitToDelete.id}`;
-            await deleteDoc(doc(db, outfitPath));
+            await deleteDoc(doc(db, outfitsPath, outfitToDelete.id));
             setOutfitToDelete(null);
         }
     };
 
+    const groupedOutfits = outfits.reduce((acc, outfit) => {
+        const category = outfit.category || 'Övrigt';
+        if (!acc[category]) acc[category] = [];
+        acc[category].push(outfit);
+        return acc;
+    }, {});
+
+    const outfitCategories = ['Sommar', 'Vinter', 'Fest', 'Casual', 'Övrigt'];
+    const sortedCategories = outfitCategories.filter(cat => groupedOutfits[cat]).concat(Object.keys(groupedOutfits).filter(cat => !outfitCategories.includes(cat)));
+
     return (
         <div>
             <Modal isOpen={!!outfitToDelete} onClose={() => setOutfitToDelete(null)} onConfirm={confirmDelete} title="Ta bort Outfit"><p>Är du säker på att du vill ta bort outfiten "{outfitToDelete?.name}"?</p></Modal>
+            <Modal isOpen={!!viewingGarment} onClose={() => setViewingGarment(null)} title={viewingGarment?.name || "Plagg"} showConfirm={false}> <GarmentDetailView garment={viewingGarment} /> </Modal>
             {showAddForm ? <AddOutfitForm onAdd={addOutfit} onCancel={() => setShowAddForm(false)} availableGarments={availableGarments} /> : (
                 <>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                        {outfits.map(o => <OutfitCard key={o.id} outfit={o} onDelete={() => setOutfitToDelete(o)} />)}
-                    </div>
-                    {outfits.length === 0 && <p className="text-center text-gray-500 mt-8">Inga outfits än. Klicka på plus-knappen för att skapa en!</p>}
+                    {outfits.length > 0 ? (
+                        sortedCategories.map(category => (
+                            <div key={category} className="mb-8">
+                                <h2 className="text-2xl font-bold border-b pb-2 mb-4">{category}</h2>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                                     {groupedOutfits[category].map(o => <OutfitCard key={o.id} outfit={o} onDelete={() => setOutfitToDelete(o)} onGarmentClick={setViewingGarment} />)}
+                                </div>
+                            </div>
+                        ))
+                    ) : (<p className="text-center text-gray-500 mt-8">Inga outfits än. Klicka på plus-knappen.</p>)}
                     <button onClick={() => setShowAddForm(true)} className="fixed bottom-20 right-5 bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700"><PlusIcon /></button>
                 </>
             )}
-        </div>
-    );
-}
-
-// --- Komponent: Chatt-vyn ---
-function ChatView({ basePath, user, appData }) {
-    const [messages, setMessages] = useState([]);
-    const [newMessage, setNewMessage] = useState('');
-    const chatPath = `${basePath}/chat`;
-
-    useEffect(() => {
-        const q = query(collection(db, chatPath));
-        const unsubscribe = onSnapshot(q, snapshot => {
-            const sortedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt?.seconds - b.createdAt?.seconds);
-            setMessages(sortedMessages);
-        });
-        return () => unsubscribe();
-    }, [chatPath]);
-
-    const sendMessage = async (e) => {
-        e.preventDefault();
-        if (newMessage.trim() === '') return;
-        await addDoc(collection(db, chatPath), { text: newMessage, createdAt: serverTimestamp(), senderId: user.uid, senderName: appData.name });
-        setNewMessage('');
-    };
-
-    return (
-        <div className="flex flex-col h-full max-h-[calc(100vh-200px)]">
-            <div className="flex-grow overflow-y-auto p-4 space-y-4">{messages.map(msg => (<div key={msg.id} className={`flex ${msg.senderId === user.uid ? 'justify-end' : 'justify-start'}`}><div className={`p-3 rounded-lg max-w-xs ${msg.senderId === user.uid ? 'bg-blue-500 text-white' : 'bg-gray-200 text-black'}`}><p className="font-bold text-sm">{msg.senderName}</p><p>{msg.text}</p></div></div>))}</div>
-            <form onSubmit={sendMessage} className="p-4 bg-white border-t flex"><input type="text" value={newMessage} onChange={e => setNewMessage(e.target.value)} className="flex-grow p-2 border rounded-l-lg" placeholder="Skriv ett meddelande..." /><button type="submit" className="bg-blue-500 text-white px-4 rounded-r-lg font-semibold">Skicka</button></form>
         </div>
     );
 }
@@ -470,22 +766,22 @@ function GarmentCard({ garment, onDelete }) {
 }
 
 // --- Komponent: Outfit-kort ---
-function OutfitCard({ outfit, onDelete }) {
+function OutfitCard({ outfit, onDelete, onGarmentClick }) {
     return (
         <div className="border rounded-lg overflow-hidden shadow-sm bg-white group relative">
-            <button onClick={onDelete} className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-red-700"><TrashIcon /></button>
+            <button onClick={onDelete} className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-red-700"><TrashIcon /></button>
             <img src={outfit.imageUrl || 'https://placehold.co/300x400/eeeeee/cccccc?text=Outfit'} alt={outfit.name} className="w-full aspect-[3/4] object-cover" />
             <div className="p-3">
-                <h3 className="font-bold text-lg truncate">{outfit.name}</h3>
-                {outfit.notes && <p className="text-sm text-gray-600 italic">"{outfit.notes}"</p>}
+                <h3 className="font-bold truncate">{outfit.name}</h3>
+                 <p className="text-sm text-gray-500">{outfit.category}</p>
+                {outfit.notes && <p className="text-xs text-gray-500 italic mt-1">"{outfit.notes}"</p>}
                 <div className="mt-2">
-                    <h4 className="font-semibold text-sm">Ingående plagg:</h4>
+                    <h4 className="font-semibold text-xs mb-1">Ingår:</h4>
                     {outfit.linkedGarments?.length > 0 ? (
-                        <div className="flex flex-wrap gap-2 mt-1">
+                        <div className="flex flex-wrap gap-1">
                             {outfit.linkedGarments.map(g => (
-                                <div key={g.id} className="flex items-center gap-2 bg-gray-100 rounded-full py-1 pl-1 pr-2 text-xs">
-                                    <img src={g.imageUrl || 'https://placehold.co/40x40/eeeeee/cccccc?text=?'} alt={g.name} className="w-6 h-6 rounded-full object-cover" />
-                                    <span className="truncate">{g.name}</span>
+                                <div key={g.id} onClick={() => onGarmentClick(g)} className="cursor-pointer" title={g.name}>
+                                    <img src={g.imageUrl || 'https://placehold.co/40x40/eeeeee/cccccc?text=?'} alt={g.name} className="w-8 h-8 rounded-full object-cover border-2 border-white hover:border-blue-500 transition" />
                                 </div>
                             ))}
                         </div>
@@ -506,46 +802,48 @@ function AddGarmentForm({ onAdd, onCancel }) {
     const [imageFile, setImageFile] = useState(null);
     const [imagePreview, setImagePreview] = useState('');
     const [isUploading, setIsUploading] = useState(false);
+    const [error, setError] = useState('');
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
-            const file = e.target.files[0];
-            setImageFile(file);
-            const reader = new FileReader();
-            reader.onloadend = () => setImagePreview(reader.result);
-            reader.readAsDataURL(file);
+            setImageFile(e.target.files[0]);
+            setImagePreview(URL.createObjectURL(e.target.files[0]));
         }
     };
-    
-    const fileToBase64 = (file) => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = error => reject(error);
-    });
-
+     
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!name) { setError("Plaggets namn måste fyllas i."); return; }
         setIsUploading(true);
-        let imageUrl = '';
-        if (imageFile) imageUrl = await fileToBase64(imageFile);
-        await onAdd({ name, category, size, location, notes, imageUrl });
-        setIsUploading(false);
+        setError('');
+        
+        try {
+            let imageUrl = '';
+            if (imageFile) imageUrl = await resizeImage(imageFile);
+            await onAdd({ name, category, size, location, notes, imageUrl });
+            onCancel(); // Stäng formuläret efter lyckad uppladdning
+        } catch (err) {
+             if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
+             else setError('Ett fel uppstod vid uppladdning.');
+        } finally {
+             setIsUploading(false);
+        }
     };
 
     return (
         <div className="bg-white p-6 rounded-lg shadow-lg max-w-lg mx-auto">
             <h2 className="text-2xl font-bold mb-4">Lägg till nytt plagg</h2>
+            {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
             <form onSubmit={handleSubmit} className="space-y-4">
-                <label htmlFor="garment-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="garment-image-upload" type="file" className="hidden" accept="image/*" capture="environment" onChange={handleImageChange}/></label>
+                <label htmlFor="garment-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-dashed rounded-lg cursor-pointer bg-gray-50">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-cover rounded-lg" /> : <span><CameraIcon /> Välj bild</span>}<input id="garment-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
                 <input type="text" placeholder="Plaggets namn (ex. Blå T-shirt)" value={name} onChange={e => setName(e.target.value)} required className="w-full p-2 border rounded"/>
                 <select value={category} onChange={e => setCategory(e.target.value)} className="w-full p-2 border rounded">{categories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                 <input type="text" placeholder="Storlek" value={size} onChange={e => setSize(e.target.value)} className="w-full p-2 border rounded"/>
                 <input type="text" placeholder="Plats (ex. I byrålådan)" value={location} onChange={e => setLocation(e.target.value)} className="w-full p-2 border rounded"/>
                 <textarea placeholder="Anteckningar" value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-2 border rounded"></textarea>
-                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button><button type="submit" disabled={isUploading || !name} className="bg-blue-600 text-white px-4 py-2 rounded font-semibold disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara plagget'}</button></div>
+                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 px-4 py-2 rounded">Avbryt</button><button type="submit" disabled={isUploading} className="bg-blue-600 text-white px-4 py-2 rounded disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara'}</button></div>
             </form>
         </div>
     );
@@ -554,69 +852,71 @@ function AddGarmentForm({ onAdd, onCancel }) {
 // --- Komponent: Lägg till Outfit-formulär ---
 function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
     const [name, setName] = useState('');
+    const [category, setCategory] = useState('Casual');
     const [notes, setNotes] = useState('');
     const [imageFile, setImageFile] = useState(null);
     const [imagePreview, setImagePreview] = useState('');
     const [selectedGarmentIds, setSelectedGarmentIds] = useState(new Set());
     const [isUploading, setIsUploading] = useState(false);
+    const [error, setError] = useState('');
+    
+    const outfitCategories = ['Sommar', 'Vinter', 'Fest', 'Casual', 'Övrigt'];
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
-            const file = e.target.files[0];
-            setImageFile(file);
-            const reader = new FileReader();
-            reader.onloadend = () => setImagePreview(reader.result);
-            reader.readAsDataURL(file);
+            setImageFile(e.target.files[0]);
+            setImagePreview(URL.createObjectURL(e.target.files[0]));
         }
     };
 
-    const handleGarmentSelect = (garmentId) => {
+    const toggleGarment = (id) => {
         const newSelection = new Set(selectedGarmentIds);
-        if (newSelection.has(garmentId)) newSelection.delete(garmentId);
-        else newSelection.add(garmentId);
+        if (newSelection.has(id)) newSelection.delete(id);
+        else newSelection.add(id);
         setSelectedGarmentIds(newSelection);
     };
-    
-    const fileToBase64 = (file) => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = error => reject(error);
-    });
-
+     
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!name) { setError("Outfitens namn måste fyllas i."); return; }
         setIsUploading(true);
-        let imageUrl = '';
-        if (imageFile) imageUrl = await fileToBase64(imageFile);
+        setError('');
         
-        const linkedGarments = availableGarments.filter(g => selectedGarmentIds.has(g.id)).map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '' }));
-
-        await onAdd({ name, notes, imageUrl, linkedGarments });
-        setIsUploading(false);
+        try {
+            let imageUrl = '';
+            if (imageFile) imageUrl = await resizeImage(imageFile);
+            const linkedGarments = availableGarments.filter(g => selectedGarmentIds.has(g.id)).map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '', category: g.category, location: g.location, size: g.size, notes: g.notes }));
+            await onAdd({ name, notes, category, imageUrl, linkedGarments });
+            onCancel();
+        } catch(err) {
+            if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
+            else setError('Ett fel uppstod.');
+        } finally {
+            setIsUploading(false);
+        }
     };
 
     return (
         <div className="bg-white p-6 rounded-lg shadow-lg max-w-lg mx-auto">
             <h2 className="text-2xl font-bold mb-4">Skapa ny Outfit</h2>
+            {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
             <form onSubmit={handleSubmit} className="space-y-4">
-                <label htmlFor="outfit-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-contain rounded-lg" /> : <div className="flex flex-col items-center justify-center pt-5 pb-6"><CameraIcon /><p className="mb-2 text-sm text-gray-500"><span className="font-semibold">Klicka eller ta en bild</span></p><p className="text-xs text-gray-500">PNG, JPG</p></div>}<input id="outfit-image-upload" type="file" className="hidden" accept="image/*" capture="environment" onChange={handleImageChange}/></label>
+                <label htmlFor="outfit-image-upload" className="flex flex-col items-center justify-center w-full aspect-[3/4] border-2 border-dashed rounded-lg cursor-pointer bg-gray-50">{imagePreview ? <img src={imagePreview} alt="Förhandsgranskning" className="h-full w-full object-cover rounded-lg" /> : <span><CameraIcon /> Välj bild</span>}<input id="outfit-image-upload" type="file" className="hidden" accept="image/*" onChange={handleImageChange}/></label>
                 <input type="text" placeholder="Outfitens namn" value={name} onChange={e => setName(e.target.value)} required className="w-full p-2 border rounded"/>
+                <select value={category} onChange={e => setCategory(e.target.value)} className="w-full p-2 border rounded">{outfitCategories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                 <textarea placeholder="Anteckningar" value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-2 border rounded"></textarea>
                 <div>
-                    <h3 className="font-semibold mb-2">Välj plagg som ingår:</h3>
-                    {availableGarments.length > 0 ? (
-                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 border rounded-lg">
-                            {availableGarments.map(g => (
-                                <div key={g.id} onClick={() => handleGarmentSelect(g.id)} className={`cursor-pointer border-2 rounded-lg p-1 transition-all ${selectedGarmentIds.has(g.id) ? 'border-blue-500 bg-blue-50' : 'border-transparent'}`}>
-                                    <img src={g.imageUrl || 'https://placehold.co/100x100/eeeeee/cccccc?text=?'} alt={g.name} className="w-full h-20 object-cover rounded"/>
-                                    <p className="text-xs text-center truncate mt-1">{g.name}</p>
-                                </div>
-                            ))}
-                        </div>
-                    ) : <p className="text-sm text-gray-400">Du måste lägga till plagg i garderoben först.</p>}
+                    <h3 className="font-semibold mb-2">Välj plagg:</h3>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto border p-2 rounded-lg">
+                        {availableGarments.map(g => (
+                            <div key={g.id} onClick={() => toggleGarment(g.id)} className={`cursor-pointer border-2 rounded-lg p-1 ${selectedGarmentIds.has(g.id) ? 'border-blue-500' : 'border-transparent'}`}>
+                                <img src={g.imageUrl || 'https://placehold.co/100x100/eeeeee/cccccc?text=?'} alt={g.name} className="w-full h-20 object-cover rounded"/>
+                                <p className="text-xs text-center truncate mt-1">{g.name}</p>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 text-gray-800 px-4 py-2 rounded font-semibold">Avbryt</button><button type="submit" disabled={isUploading || !name} className="bg-blue-600 text-white px-4 py-2 rounded font-semibold disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara Outfit'}</button></div>
+                <div className="flex justify-end gap-4"><button type="button" onClick={onCancel} className="bg-gray-200 px-4 py-2 rounded">Avbryt</button><button type="submit" disabled={isUploading} className="bg-blue-600 text-white px-4 py-2 rounded disabled:bg-gray-400">{isUploading ? 'Sparar...' : 'Spara'}</button></div>
             </form>
         </div>
     );
