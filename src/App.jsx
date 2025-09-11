@@ -831,8 +831,7 @@ function AddGarmentForm({ onAdd, onCancel }) {
         } catch (err) {
              if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
              else setError('Ett fel uppstod vid uppladdning.');
-        } finally {
-             setIsUploading(false);
+             setIsUploading(false); // Stanna kvar i formuläret vid fel
         }
     };
 
