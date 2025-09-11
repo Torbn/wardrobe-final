@@ -100,7 +100,7 @@ export default function App() {
         const initFirebase = async () => {
             try {
                 // Anropar din Cloud Function för att hämta konfigurationen
-                const functionUrl = "https://us-central1-wardrobe-1df3d.cloudfunctions.net/fetchFirebaseConfig";
+                const functionUrl = "https://fetchfirebaseconfig-mh2elqvcwa-uc.a.run.app";
 
                 const response = await fetch(functionUrl);
                 if (!response.ok) {
