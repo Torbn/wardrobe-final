@@ -118,7 +118,6 @@ export default function App() {
             if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "AIzaSy...") {
                 if (!app) {
                     app = initializeApp(firebaseConfig);
-                    // VIKTIGT: Spara användarens session i webbläsaren
                     auth = initializeAuth(app, { persistence: browserLocalPersistence });
                     db = getFirestore(app);
                 }
