@@ -135,19 +135,26 @@ export default function App() {
     useEffect(() => {
         if (!firebaseReady) return;
         
-        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
-                setAuthLoading(false);
+                setAuthLoading(false); // Autentisering klar, användare finns
+
                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                onSnapshot(userDocRef, (userDocSnap) => {
+                const unsubscribeSnapshot = onSnapshot(userDocRef, (userDocSnap) => {
                     setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
+                    setDataLoading(false); // Dataladdning klar
+                }, (err) => {
+                    console.error("Snapshot error:", err);
+                    setError("Kunde inte hämta profildata.");
                     setDataLoading(false);
-                }, () => { setError("Kunde inte hämta profildata."); setDataLoading(false); });
+                });
+                return unsubscribeSnapshot;
             } else {
-                 try {
-                    await signInAnonymously(auth);
-                 } catch (err) { setError("Autentisering misslyckades."); setAuthLoading(false); }
+                signInAnonymously(auth).catch((err) => {
+                    setError("Autentisering misslyckades.");
+                    setAuthLoading(false);
+                });
             }
         });
         return () => unsubscribe();
@@ -183,6 +190,7 @@ export default function App() {
 
     const renderContent = () => {
         if (dataLoading && user) return <SkeletonLoader />;
+        
         if (user && appData) {
             if (appData.mode === 'family' && !appData.familyId) {
                  if (appData.status === 'pending') return <PendingApprovalScreen />;
