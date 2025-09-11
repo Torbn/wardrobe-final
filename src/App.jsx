@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, initializeAuth, browserLocalPersistence } from 'firebase/auth';
 import { 
     getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
     collection, onSnapshot, query, serverTimestamp, where, writeBatch
@@ -118,7 +118,7 @@ export default function App() {
             if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "AIzaSy...") {
                 if (!app) {
                     app = initializeApp(firebaseConfig);
-                    auth = getAuth(app);
+                    auth = initializeAuth(app, { persistence: browserLocalPersistence });
                     db = getFirestore(app);
                 }
                 setFirebaseReady(true);
@@ -138,14 +138,13 @@ export default function App() {
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
             if (currentUser) {
                 setUser(currentUser);
-                setAuthLoading(false); // Autentisering klar, användare finns
+                setAuthLoading(false);
 
                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
                 const unsubscribeSnapshot = onSnapshot(userDocRef, (userDocSnap) => {
                     setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
-                    setDataLoading(false); // Dataladdning klar
+                    setDataLoading(false);
                 }, (err) => {
-                    console.error("Snapshot error:", err);
                     setError("Kunde inte hämta profildata.");
                     setDataLoading(false);
                 });
@@ -832,7 +831,8 @@ function AddGarmentForm({ onAdd, onCancel }) {
         } catch (err) {
              if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
              else setError('Ett fel uppstod vid uppladdning.');
-             setIsUploading(false); // Stanna kvar i formuläret vid fel
+        } finally {
+             setIsUploading(false);
         }
     };
 
@@ -895,7 +895,8 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         } catch(err) {
             if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
             else setError('Ett fel uppstod.');
-            setIsUploading(false); // Stanna kvar i formuläret vid fel
+        } finally {
+            setIsUploading(false);
         }
     };
 
