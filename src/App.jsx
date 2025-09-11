@@ -118,6 +118,7 @@ export default function App() {
             if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey !== "AIzaSy...") {
                 if (!app) {
                     app = initializeApp(firebaseConfig);
+                    // VIKTIGT: Spara användarens session i webbläsaren
                     auth = initializeAuth(app, { persistence: browserLocalPersistence });
                     db = getFirestore(app);
                 }
@@ -831,7 +832,8 @@ function AddGarmentForm({ onAdd, onCancel }) {
         } catch (err) {
              if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
              else setError('Ett fel uppstod vid uppladdning.');
-             setIsUploading(false); // Stanna kvar i formuläret vid fel
+        } finally {
+             setIsUploading(false);
         }
     };
 
