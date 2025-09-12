@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInWithCustomToken, signInAnonymously } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
     getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
     collection, onSnapshot, query, serverTimestamp, where, writeBatch, getDocs
@@ -113,18 +113,22 @@ export default function App() {
                 const sessionId = params.get('session');
 
                 if (sessionId) {
-                    const createToken = httpsCallable(functions, 'createCustomToken');
-                    const result = await createToken({ uid: sessionId });
-                    const userCredential = await signInWithCustomToken(auth, result.data.token);
-                    setUser(userCredential.user);
+                    // Om ett ID finns i URL:en, försök logga in med det
+                    if (auth.currentUser?.uid !== sessionId) {
+                         const createToken = httpsCallable(functions, 'createCustomToken');
+                         const result = await createToken({ uid: sessionId });
+                         await signInWithCustomToken(auth, result.data.token);
+                    }
                 } else {
+                    // Om inget ID finns, skapa en ny anonym användare och ladda om
                     const userCredential = await signInAnonymously(auth);
                     const newUid = userCredential.user.uid;
                     const newUrl = new URL(window.location.href);
                     newUrl.searchParams.set('session', newUid);
                     window.location.href = newUrl.toString();
-                    return; // Stoppa exekvering för att invänta omladdning
+                    return; // Stoppa exekveringen för att invänta omladdning
                 }
+
             } catch (e) {
                 setError(`Kunde inte starta appen: ${e.message}`);
                 setLoading(false);
@@ -133,26 +137,27 @@ export default function App() {
 
         initFirebaseAndAuth();
     }, []);
-
+    
     useEffect(() => {
-        if (!user) {
-            setLoading(false);
-            return;
-        }
-
-        setLoading(true);
-        const userDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
-        const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
-            setAppData(docSnap.exists() ? docSnap.data() : null);
-            setLoading(false);
-        }, (err) => {
-            setError("Kunde inte ladda profildata.");
-            setLoading(false);
+        if (!auth) return;
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            setUser(currentUser);
+            if(currentUser){
+                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
+                 const unsubscribeSnapshot = onSnapshot(userDocRef, (docSnap) => {
+                     setAppData(docSnap.exists() ? docSnap.data() : null);
+                     setLoading(false);
+                 }, (err) => {
+                     setError("Kunde inte ladda profildata.");
+                     setLoading(false);
+                 });
+                 return unsubscribeSnapshot;
+            } else {
+                setLoading(false);
+            }
         });
-
         return () => unsubscribe();
-    }, [user]);
-
+    }, [auth]);
 
     const handleProfileSetup = async (name, mode) => {
         if (!user) throw new Error("Användare inte inloggad.");
