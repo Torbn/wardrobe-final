@@ -661,7 +661,7 @@ function WardrobeView({ owner }) {
         return acc;
     }, {});
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Träning', 'Vinter', 'Övrigt'];
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
     const sortedCategories = categories.filter(cat => groupedGarments[cat]).concat(Object.keys(groupedGarments).filter(cat => !categories.includes(cat)));
     
     const toggleCategory = (category) => setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
@@ -817,7 +817,7 @@ function AddGarmentForm({ onAdd, onCancel }) {
     const [isUploading, setIsUploading] = useState(false);
     const [error, setError] = useState('');
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Träning', 'Vinter', 'Övrigt'];
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
@@ -836,12 +836,11 @@ function AddGarmentForm({ onAdd, onCancel }) {
             let imageUrl = '';
             if (imageFile) imageUrl = await resizeImage(imageFile);
             await onAdd({ name, category, size, location, notes, imageUrl });
-            onCancel(); // Stäng formuläret efter lyckad uppladdning
+            onCancel(); // Stäng formuläret direkt efter lyckad uppladdning
         } catch (err) {
              if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
              else setError('Ett fel uppstod vid uppladdning.');
-        } finally {
-             setIsUploading(false);
+             setIsUploading(false); // Återställ knappen endast vid fel
         }
     };
 
@@ -900,12 +899,11 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
             if (imageFile) imageUrl = await resizeImage(imageFile);
             const linkedGarments = availableGarments.filter(g => selectedGarmentIds.has(g.id)).map(g => ({ id: g.id, name: g.name, imageUrl: g.imageUrl || '', category: g.category, location: g.location, size: g.size, notes: g.notes }));
             await onAdd({ name, notes, category, imageUrl, linkedGarments });
-            onCancel();
+            onCancel(); // Stäng formuläret direkt efter lyckad uppladdning
         } catch(err) {
             if (err.message.includes('longer than 1048487 bytes')) setError('Bilden är för stor.');
             else setError('Ett fel uppstod.');
-        } finally {
-            setIsUploading(false);
+            setIsUploading(false); // Återställ knappen endast vid fel
         }
     };
 
