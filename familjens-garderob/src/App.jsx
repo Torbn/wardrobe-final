@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, initializeAuth, browserLocalPersistence } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signInWithCustomToken, signInAnonymously } from 'firebase/auth';
 import { 
     getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
-    collection, onSnapshot, query, serverTimestamp, where, writeBatch
+    collection, onSnapshot, query, serverTimestamp, where, writeBatch, getDocs
 } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
 // --- Helper-ikoner (SVG) ---
 const HomeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>;
@@ -24,6 +25,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 let app;
 let auth;
 let db;
+let functions;
 
 // --- Bildhanteringsfunktion ---
 const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => new Promise((resolve, reject) => {
@@ -86,73 +88,68 @@ function SkeletonLoader() {
 export default function App() {
     const [user, setUser] = useState(null);
     const [appData, setAppData] = useState(null);
-    const [authLoading, setAuthLoading] = useState(true);
-    const [dataLoading, setDataLoading] = useState(true);
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [firebaseReady, setFirebaseReady] = useState(false);
     const [joinFamilyIdFromUrl, setJoinFamilyIdFromUrl] = useState(null);
     
     useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const familyId = params.get('joinFamily');
-        if (familyId) setJoinFamilyIdFromUrl(familyId);
-
-        const initFirebase = async () => {
+        const initFirebaseAndAuth = async () => {
             try {
                 const functionUrl = "https://fetchfirebaseconfig-mh2elqvcwa-uc.a.run.app";
-
                 const response = await fetch(functionUrl);
-                if (!response.ok) {
-                    throw new Error(`Cloud Function svarade med status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`Nätverksfel: ${response.status}`);
                 const fetchedConfig = await response.json();
 
-                if (fetchedConfig && fetchedConfig.apiKey) {
-                    if (!app) {
-                        app = initializeApp(fetchedConfig);
-                        auth = initializeAuth(app, { persistence: browserLocalPersistence });
-                        db = getFirestore(app);
-                    }
-                    setFirebaseReady(true);
-                } else {
-                    throw new Error("Mottagen Firebase-konfiguration var ogiltig.");
+                if (!fetchedConfig?.apiKey) throw new Error("Ogiltig konfiguration mottagen.");
+
+                if (!app) {
+                    app = initializeApp(fetchedConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+                    functions = getFunctions(app);
                 }
+
+                const params = new URLSearchParams(window.location.search);
+                const sessionId = params.get('session');
+
+                onAuthStateChanged(auth, (currentUser) => {
+                    setUser(currentUser);
+                    if (currentUser) {
+                        const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
+                        onSnapshot(userDocRef, (docSnap) => {
+                            setAppData(docSnap.exists() ? docSnap.data() : null);
+                            setLoading(false);
+                        });
+                    } else {
+                        setLoading(false); // Ingen användare, sluta ladda
+                    }
+                });
+
+                if (sessionId) {
+                    if (!auth.currentUser || auth.currentUser.uid !== sessionId) {
+                        const createToken = httpsCallable(functions, 'createCustomToken');
+                        const result = await createToken({ uid: sessionId });
+                        await signInWithCustomToken(auth, result.data.token);
+                    }
+                } else {
+                     if(!auth.currentUser) {
+                        const userCredential = await signInAnonymously(auth);
+                        const newUid = userCredential.user.uid;
+                        const newUrl = new URL(window.location.href);
+                        newUrl.searchParams.set('session', newUid);
+                        window.location.href = newUrl.toString();
+                    }
+                }
+
             } catch (e) {
-                console.error("Firebase Init Error:", e);
-                setError(`Kunde inte ansluta till databasen: ${e.message}`);
-                setAuthLoading(false);
+                setError(`Kunde inte starta appen: ${e.message}`);
+                setLoading(false);
             }
         };
-        
-        initFirebase();
+
+        initFirebaseAndAuth();
     }, []);
 
-    useEffect(() => {
-        if (!firebaseReady) return;
-        
-        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-            if (currentUser) {
-                setUser(currentUser);
-                setAuthLoading(false);
-
-                const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                const unsubscribeSnapshot = onSnapshot(userDocRef, (userDocSnap) => {
-                    setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
-                    setDataLoading(false);
-                }, (err) => {
-                    setError("Kunde inte hämta profildata.");
-                    setDataLoading(false);
-                });
-                return unsubscribeSnapshot;
-            } else {
-                signInAnonymously(auth).catch((err) => {
-                    setError("Autentisering misslyckades.");
-                    setAuthLoading(false);
-                });
-            }
-        });
-        return () => unsubscribe();
-    }, [firebaseReady]);
 
     const handleProfileSetup = async (name, mode) => {
         if (!user) throw new Error("Användare inte inloggad.");
@@ -179,27 +176,21 @@ export default function App() {
     }
     
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
+    if (loading) return <SkeletonLoader />;
     
-    if (authLoading) return <SkeletonLoader />;
-
-    const renderContent = () => {
-        if (dataLoading && user) return <SkeletonLoader />;
-        
-        if (user && appData) {
-            if (appData.mode === 'family' && !appData.familyId) {
-                 if (appData.status === 'pending') return <PendingApprovalScreen />;
-                 return <FamilySetup user={user} appData={appData} />;
-            }
-            if (appData.status === 'pending') return <PendingApprovalScreen />;
-            return <WardrobeManager user={user} appData={appData} />;
+    if (user && appData) {
+        if (appData.mode === 'family' && !appData.familyId) {
+             if (appData.status === 'pending') return <PendingApprovalScreen />;
+             return <FamilySetup user={user} appData={appData} />;
         }
-        if (user && !appData) {
-            return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
-        }
-        return <SkeletonLoader />;
-    };
+        if (appData.status === 'pending') return <PendingApprovalScreen />;
+        return <WardrobeManager user={user} appData={appData} />;
+    }
+    if (user && !appData) {
+        return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
+    }
 
-    return <div className="h-screen w-screen bg-gray-100 antialiased">{renderContent()}</div>
+    return <SkeletonLoader />;
 }
 
 // --- Komponent: Slutför skapande av familj ---
@@ -920,5 +911,4 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         </div>
     );
 }
-
 
