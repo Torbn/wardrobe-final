@@ -661,7 +661,7 @@ function WardrobeView({ owner }) {
         return acc;
     }, {});
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Träning', 'Vinter', 'Övrigt'];
     const sortedCategories = categories.filter(cat => groupedGarments[cat]).concat(Object.keys(groupedGarments).filter(cat => !categories.includes(cat)));
     
     const toggleCategory = (category) => setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
@@ -817,7 +817,7 @@ function AddGarmentForm({ onAdd, onCancel }) {
     const [isUploading, setIsUploading] = useState(false);
     const [error, setError] = useState('');
 
-    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Idrott', 'Vinter', 'Övrigt'];
+    const categories = ['Tröjor', 'Skjortor', 'Byxor', 'Kjol/klänning', 'Underkläder', 'Skor', 'Träning', 'Vinter', 'Övrigt'];
 
     const handleImageChange = (e) => {
         if (e.target.files[0]) {
@@ -934,4 +934,5 @@ function AddOutfitForm({ onAdd, onCancel, availableGarments }) {
         </div>
     );
 }
+
 
