@@ -115,31 +115,33 @@ export default function App() {
                 onAuthStateChanged(auth, (currentUser) => {
                     if (currentUser) {
                         setUser(currentUser);
+                        // Lyssna på profildata när användaren är inloggad
                         const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
                         onSnapshot(userDocRef, (docSnap) => {
                             setAppData(docSnap.exists() ? docSnap.data() : null);
                             setLoading(false);
                         });
                     } else {
-                        // Denna del körs bara om ingen är inloggad alls
-                        setLoading(false);
+                        setLoading(false); // Ingen användare, sluta ladda
                     }
                 });
 
                 if (sessionId) {
-                    if (auth.currentUser?.uid !== sessionId) {
+                    if (!auth.currentUser || auth.currentUser.uid !== sessionId) {
                         const createToken = httpsCallable(functions, 'createCustomToken');
                         const result = await createToken({ uid: sessionId });
                         await signInWithCustomToken(auth, result.data.token);
                     }
                 } else {
-                    const userCredential = await signInAnonymously(auth);
-                    const newUid = userCredential.user.uid;
-                    window.location.href = `${window.location.pathname}?session=${newUid}`;
+                     // Endast om ingen användare ALLS finns (första gången någonsin)
+                    if(!auth.currentUser) {
+                        const userCredential = await signInAnonymously(auth);
+                        const newUid = userCredential.user.uid;
+                        window.location.href = `${window.location.pathname}?session=${newUid}`;
+                    }
                 }
 
             } catch (e) {
-                console.error("Initieringsfel:", e);
                 setError(`Kunde inte starta appen: ${e.message}`);
                 setLoading(false);
             }
