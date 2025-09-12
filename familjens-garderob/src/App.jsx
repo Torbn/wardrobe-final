@@ -112,35 +112,19 @@ export default function App() {
                 const params = new URLSearchParams(window.location.search);
                 const sessionId = params.get('session');
 
-                onAuthStateChanged(auth, (currentUser) => {
-                    setUser(currentUser);
-                    if (currentUser) {
-                        const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                        onSnapshot(userDocRef, (docSnap) => {
-                            setAppData(docSnap.exists() ? docSnap.data() : null);
-                            setLoading(false);
-                        });
-                    } else {
-                        setLoading(false); // Ingen användare, sluta ladda
-                    }
-                });
-
                 if (sessionId) {
-                    if (!auth.currentUser || auth.currentUser.uid !== sessionId) {
-                        const createToken = httpsCallable(functions, 'createCustomToken');
-                        const result = await createToken({ uid: sessionId });
-                        await signInWithCustomToken(auth, result.data.token);
-                    }
+                    const createToken = httpsCallable(functions, 'createCustomToken');
+                    const result = await createToken({ uid: sessionId });
+                    const userCredential = await signInWithCustomToken(auth, result.data.token);
+                    setUser(userCredential.user);
                 } else {
-                     if(!auth.currentUser) {
-                        const userCredential = await signInAnonymously(auth);
-                        const newUid = userCredential.user.uid;
-                        const newUrl = new URL(window.location.href);
-                        newUrl.searchParams.set('session', newUid);
-                        window.location.href = newUrl.toString();
-                    }
+                    const userCredential = await signInAnonymously(auth);
+                    const newUid = userCredential.user.uid;
+                    const newUrl = new URL(window.location.href);
+                    newUrl.searchParams.set('session', newUid);
+                    window.location.href = newUrl.toString();
+                    return; // Stoppa exekvering för att invänta omladdning
                 }
-
             } catch (e) {
                 setError(`Kunde inte starta appen: ${e.message}`);
                 setLoading(false);
@@ -149,6 +133,25 @@ export default function App() {
 
         initFirebaseAndAuth();
     }, []);
+
+    useEffect(() => {
+        if (!user) {
+            setLoading(false);
+            return;
+        }
+
+        setLoading(true);
+        const userDocRef = doc(db, `/artifacts/${appId}/users/${user.uid}/profile/main`);
+        const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
+            setAppData(docSnap.exists() ? docSnap.data() : null);
+            setLoading(false);
+        }, (err) => {
+            setError("Kunde inte ladda profildata.");
+            setLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [user]);
 
 
     const handleProfileSetup = async (name, mode) => {
