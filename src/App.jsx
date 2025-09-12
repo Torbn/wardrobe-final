@@ -108,7 +108,7 @@ export default function App() {
                 }
 
                 const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-                    setUser(currentUser); // Sätter antingen en användare eller null
+                    setUser(currentUser);
                     setLoading(false);
                 });
                 return () => unsubscribe();
