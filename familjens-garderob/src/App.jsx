@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, initializeAuth, browserLocalPersistence } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
     getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
     collection, onSnapshot, query, serverTimestamp, where, writeBatch
@@ -88,70 +88,72 @@ function SkeletonLoader() {
 export default function App() {
     const [user, setUser] = useState(null);
     const [appData, setAppData] = useState(null);
-    const [authLoading, setAuthLoading] = useState(true);
-    const [dataLoading, setDataLoading] = useState(true);
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [firebaseReady, setFirebaseReady] = useState(false);
     const [joinFamilyIdFromUrl, setJoinFamilyIdFromUrl] = useState(null);
     
     useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const familyId = params.get('joinFamily');
-        if (familyId) setJoinFamilyIdFromUrl(familyId);
-
-        const initFirebase = async () => {
+        const initFirebaseAndAuth = async () => {
             try {
+                // Steg 1: Hämta konfiguration från Cloud Function
                 const functionUrl = "https://fetchfirebaseconfig-mh2elqvcwa-uc.a.run.app";
-
                 const response = await fetch(functionUrl);
-                if (!response.ok) {
-                    throw new Error(`Cloud Function svarade med status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`Nätverksfel: ${response.status}`);
                 const fetchedConfig = await response.json();
+                
+                if (!fetchedConfig?.apiKey) throw new Error("Ogiltig konfiguration mottagen.");
 
-                if (fetchedConfig && fetchedConfig.apiKey) {
-                    if (!app) {
-                        app = initializeApp(fetchedConfig);
-                        auth = initializeAuth(app, { persistence: browserLocalPersistence });
-                        db = getFirestore(app);
-                        functions = getFunctions(app);
-                    }
-                    setFirebaseReady(true);
-                } else {
-                    throw new Error("Mottagen Firebase-konfiguration var ogiltig.");
+                // Initiera Firebase om det inte redan gjorts
+                if (!app) {
+                    app = initializeApp(fetchedConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+                    functions = getFunctions(app);
                 }
+                setFirebaseReady(true);
+
+                // Steg 2: Hantera användarsession med URL-parameter
+                const params = new URLSearchParams(window.location.search);
+                const sessionId = params.get('session');
+
+                if (sessionId) {
+                    // Om ett session-ID finns, skapa en custom token för att logga in
+                    const createToken = httpsCallable(functions, 'createCustomToken');
+                    const result = await createToken({ uid: sessionId });
+                    const customToken = result.data.token;
+                    await signInWithCustomToken(auth, customToken);
+                } else {
+                    // Om inget session-ID finns (första besöket)
+                    const userCredential = await signInAnonymously(auth);
+                    const newUid = userCredential.user.uid;
+                    // Ladda om sidan och lägg till det nya ID:t i URL:en
+                    window.location.href = `${window.location.pathname}?session=${newUid}`;
+                }
+
             } catch (e) {
-                console.error("Firebase Init Error:", e);
-                setError(`Kunde inte ansluta till databasen: ${e.message}`);
-                setAuthLoading(false);
+                console.error("Initieringsfel:", e);
+                setError(`Kunde inte starta appen: ${e.message}`);
+                setLoading(false);
             }
         };
-        
-        initFirebase();
+
+        initFirebaseAndAuth();
     }, []);
 
     useEffect(() => {
-        if (!firebaseReady) return;
-        
+        if (!auth) return;
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            setUser(currentUser);
             if (currentUser) {
-                setUser(currentUser);
-                setAuthLoading(false);
-
                 const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                const unsubscribeSnapshot = onSnapshot(userDocRef, (userDocSnap) => {
-                    setAppData(userDocSnap.exists() ? userDocSnap.data() : null);
-                    setDataLoading(false);
-                }, (err) => {
-                    setError("Kunde inte hämta profildata.");
-                    setDataLoading(false);
-                });
-                return unsubscribeSnapshot;
+                const unsubSnapshot = onSnapshot(userDocRef, (docSnap) => {
+                    setAppData(docSnap.exists() ? docSnap.data() : null);
+                    setLoading(false);
+                }, () => { setError("Kunde inte ladda profildata."); setLoading(false); });
+                return unsubSnapshot;
             } else {
-                 signInAnonymously(auth).catch((err) => {
-                    setError("Autentisering misslyckades.");
-                    setAuthLoading(false);
-                });
+                setLoading(false);
             }
         });
         return () => unsubscribe();
@@ -182,27 +184,21 @@ export default function App() {
     }
     
     if (error) return <div className="flex items-center justify-center h-screen bg-red-100"><div className="text-xl text-red-700 p-8">{error}</div></div>;
+    if (loading) return <SkeletonLoader />;
     
-    if (authLoading) return <SkeletonLoader />;
-
-    const renderContent = () => {
-        if (dataLoading && user) return <SkeletonLoader />;
-        
-        if (user && appData) {
-            if (appData.mode === 'family' && !appData.familyId) {
-                 if (appData.status === 'pending') return <PendingApprovalScreen />;
-                 return <FamilySetup user={user} appData={appData} />;
-            }
-            if (appData.status === 'pending') return <PendingApprovalScreen />;
-            return <WardrobeManager user={user} appData={appData} />;
+    if (user && appData) {
+        if (appData.mode === 'family' && !appData.familyId) {
+             if (appData.status === 'pending') return <PendingApprovalScreen />;
+             return <FamilySetup user={user} appData={appData} />;
         }
-        if (user && !appData) {
-            return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
-        }
-        return <SkeletonLoader />;
-    };
+        if (appData.status === 'pending') return <PendingApprovalScreen />;
+        return <WardrobeManager user={user} appData={appData} />;
+    }
+    if (user && !appData) {
+        return <ProfileSetup onSetup={handleProfileSetup} onJoinRequest={handleJoinRequest} joinFamilyIdFromUrl={joinFamilyIdFromUrl} />;
+    }
 
-    return <div className="h-screen w-screen bg-gray-100 antialiased">{renderContent()}</div>
+    return <SkeletonLoader />;
 }
 
 // --- Komponent: Slutför skapande av familj ---
