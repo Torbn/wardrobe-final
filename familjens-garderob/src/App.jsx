@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, initializeAuth, browserLocalPersistence } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
     getFirestore, doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, 
-    collection, onSnapshot, query, serverTimestamp, where, writeBatch
+    collection, onSnapshot, query, serverTimestamp, where, writeBatch,
+    getFunctions, httpsCallable
 } from 'firebase/firestore';
 
 // --- Helper-ikoner (SVG) ---
@@ -24,6 +25,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 let app;
 let auth;
 let db;
+let functions;
 
 // --- Bildhanteringsfunktion ---
 const resizeImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.7) => new Promise((resolve, reject) => {
@@ -110,8 +112,9 @@ export default function App() {
                 if (fetchedConfig && fetchedConfig.apiKey) {
                     if (!app) {
                         app = initializeApp(fetchedConfig);
-                        auth = initializeAuth(app, { persistence: browserLocalPersistence });
+                        auth = getAuth(app); // Använd getAuth här
                         db = getFirestore(app);
+                        functions = getFunctions(app);
                     }
                     setFirebaseReady(true);
                 } else {
@@ -145,7 +148,8 @@ export default function App() {
                 });
                 return unsubscribeSnapshot;
             } else {
-                signInAnonymously(auth).catch((err) => {
+                 // Denna del körs bara om användaren är helt utloggad
+                 signInAnonymously(auth).catch((err) => {
                     setError("Autentisering misslyckades.");
                     setAuthLoading(false);
                 });
