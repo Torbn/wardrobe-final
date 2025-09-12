@@ -90,44 +90,51 @@ export default function App() {
     const [appData, setAppData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [firebaseReady, setFirebaseReady] = useState(false);
     const [joinFamilyIdFromUrl, setJoinFamilyIdFromUrl] = useState(null);
     
     useEffect(() => {
         const initFirebaseAndAuth = async () => {
             try {
-                // Steg 1: Hämta konfiguration från Cloud Function
                 const functionUrl = "https://fetchfirebaseconfig-mh2elqvcwa-uc.a.run.app";
                 const response = await fetch(functionUrl);
                 if (!response.ok) throw new Error(`Nätverksfel: ${response.status}`);
                 const fetchedConfig = await response.json();
-                
+
                 if (!fetchedConfig?.apiKey) throw new Error("Ogiltig konfiguration mottagen.");
 
-                // Initiera Firebase om det inte redan gjorts
                 if (!app) {
                     app = initializeApp(fetchedConfig);
                     auth = getAuth(app);
                     db = getFirestore(app);
                     functions = getFunctions(app);
                 }
-                setFirebaseReady(true);
 
-                // Steg 2: Hantera användarsession med URL-parameter
                 const params = new URLSearchParams(window.location.search);
                 const sessionId = params.get('session');
 
+                onAuthStateChanged(auth, (currentUser) => {
+                    if (currentUser) {
+                        setUser(currentUser);
+                        const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
+                        onSnapshot(userDocRef, (docSnap) => {
+                            setAppData(docSnap.exists() ? docSnap.data() : null);
+                            setLoading(false);
+                        });
+                    } else {
+                        // Denna del körs bara om ingen är inloggad alls
+                        setLoading(false);
+                    }
+                });
+
                 if (sessionId) {
-                    // Om ett session-ID finns, skapa en custom token för att logga in
-                    const createToken = httpsCallable(functions, 'createCustomToken');
-                    const result = await createToken({ uid: sessionId });
-                    const customToken = result.data.token;
-                    await signInWithCustomToken(auth, customToken);
+                    if (auth.currentUser?.uid !== sessionId) {
+                        const createToken = httpsCallable(functions, 'createCustomToken');
+                        const result = await createToken({ uid: sessionId });
+                        await signInWithCustomToken(auth, result.data.token);
+                    }
                 } else {
-                    // Om inget session-ID finns (första besöket)
                     const userCredential = await signInAnonymously(auth);
                     const newUid = userCredential.user.uid;
-                    // Ladda om sidan och lägg till det nya ID:t i URL:en
                     window.location.href = `${window.location.pathname}?session=${newUid}`;
                 }
 
@@ -141,23 +148,6 @@ export default function App() {
         initFirebaseAndAuth();
     }, []);
 
-    useEffect(() => {
-        if (!auth) return;
-        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-            setUser(currentUser);
-            if (currentUser) {
-                const userDocRef = doc(db, `/artifacts/${appId}/users/${currentUser.uid}/profile/main`);
-                const unsubSnapshot = onSnapshot(userDocRef, (docSnap) => {
-                    setAppData(docSnap.exists() ? docSnap.data() : null);
-                    setLoading(false);
-                }, () => { setError("Kunde inte ladda profildata."); setLoading(false); });
-                return unsubSnapshot;
-            } else {
-                setLoading(false);
-            }
-        });
-        return () => unsubscribe();
-    }, [firebaseReady]);
 
     const handleProfileSetup = async (name, mode) => {
         if (!user) throw new Error("Användare inte inloggad.");
